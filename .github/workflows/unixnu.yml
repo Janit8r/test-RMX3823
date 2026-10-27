@@ -403,6 +403,8 @@ jobs:
             --target RELEASE 2>&1 | tee "$log"
           rc=${PIPESTATUS[0]}
           set -e
+          # The last "== bootimg:" line names the image and its size.
+          grep -n '^== bootimg' "$log" || true
           find out -name '*.img' | sort
           df -h "$GITHUB_WORKSPACE" || true
           if [ "$rc" -ne 0 ]; then
@@ -416,16 +418,28 @@ jobs:
       - name: Stage the boot image
         if: env.BOOTIMG == 'true'
         run: |
-          # ./unixnu bootimg writes out/boot/boot.img. Other boot.img files can
-          # exist under out/ (a fetched IPSW unpacks its own), so prefer that
-          # path and list every candidate when it is missing.
-          image=$(find unixnu/out/boot -name boot.img -type f 2>/dev/null | head -n 1)
+          # ./unixnu bootimg writes out/<board>/<os profile>/<defconfig>/boot/
+          # boot.img, not out/boot/boot.img, and writes boot.json beside it. A
+          # fetched IPSW can leave other boot.img files under out/, so the
+          # sibling boot.json is what identifies the right one. find exits
+          # non-zero when it matches nothing, which under set -e would end the
+          # step before any message is printed - hence the "|| true".
+          image=""
+          fallback=""
+          for candidate in $(find unixnu/out -name boot.img -type f 2>/dev/null || true); do
+            [ -n "$fallback" ] || fallback="$candidate"
+            if [ -f "$(dirname "$candidate")/boot.json" ]; then
+              image="$candidate"
+              break
+            fi
+          done
           if [ -z "$image" ]; then
-            image=$(find unixnu/out -name boot.img -type f 2>/dev/null | head -n 1)
+            echo "::warning::no boot.img has a boot.json beside it; every candidate:"
+            find unixnu/out -name 'boot.img' -o -name 'boot.json' 2>/dev/null | sed -n '1,20p' || true
+            image="$fallback"
           fi
           if [ -z "$image" ]; then
             echo "::error::the boot image step produced no boot.img"
-            find unixnu/out -name 'boot.img*' 2>/dev/null | sed -n '1,20p' || true
             exit 1
           fi
           echo "boot image from $image"
