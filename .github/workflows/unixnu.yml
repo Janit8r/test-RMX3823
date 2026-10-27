@@ -334,6 +334,61 @@ jobs:
           # something that is not Python any more.
           python3 -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/unixnu/bootimg.py').read_text()); print('bootimg.py still parses')"
 
+      - name: Let the boot image verifier read a v4 header
+        if: env.BOOTIMG == 'true'
+        working-directory: unixnu
+        run: |
+          # verify() unpacks a v0/v2 header: kernel address at 12, tags at 32,
+          # page_size at 36. mkbootimg writes the v3/v4 layout instead, where
+          # those bytes are ramdisk_size, a reserved word and another reserved
+          # word, and the header is padded to pagesize rather than carrying it
+          # (unixnu-v7-bootimg: "boot image header does not match the requested
+          # parameters"). Upstream salami.toml asks for header_version 4 too,
+          # so this is not a value this board chose wrong. v3/v4 has no load
+          # addresses at all, so only the magic, the reserved word and the
+          # header version can be compared; everything else still round-trips.
+          python3 - <<'PY'
+          import pathlib, sys
+          path = pathlib.Path('scripts/unixnu/bootimg.py')
+          source = path.read_text()
+          old = (
+              "    if data[:8] != b'ANDROID!' or second_size or version != image['header_version'] or page != image['pagesize']:\n"
+              "        raise Error('boot image header does not match the requested parameters')\n"
+              "    if kernel_address != image['base'] + image['kernel_offset'] or tags != image['base'] + image['tags_offset']:\n"
+              "        raise Error('boot image load addresses do not match the requested offsets')\n"
+          )
+          new = (
+              "    if image['header_version'] >= 3:\n"
+              "        if data[:8] != b'ANDROID!' or second_size or version != image['header_version']:\n"
+              "            raise Error('boot image header does not match the requested parameters')\n"
+              "        page = image['pagesize']\n"
+              "        kernel_address = tags = None\n"
+              "    else:\n"
+              "        if data[:8] != b'ANDROID!' or second_size or version != image['header_version'] or page != image['pagesize']:\n"
+              "            raise Error('boot image header does not match the requested parameters')\n"
+              "        if kernel_address != image['base'] + image['kernel_offset'] or tags != image['base'] + image['tags_offset']:\n"
+              "            raise Error('boot image load addresses do not match the requested offsets')\n"
+          )
+          if source.count(old) != 1:
+              sys.exit('::error::the header checks are gone from scripts/unixnu/bootimg.py; upstream changed them')
+          source = source.replace(old, new)
+          old2 = (
+              "    return {'kernel_sha256': hashlib.sha256(kernel).hexdigest(), 'ramdisk_bytes': ramdisk_size,\n"
+              "            'header_version': version, 'kernel_address': hex(kernel_address), 'tags_address': hex(tags)}\n"
+          )
+          new2 = (
+              "    return {'kernel_sha256': hashlib.sha256(kernel).hexdigest(), 'ramdisk_bytes': ramdisk_size,\n"
+              "            'header_version': version,\n"
+              "            'kernel_address': None if kernel_address is None else hex(kernel_address),\n"
+              "            'tags_address': None if tags is None else hex(tags)}\n"
+          )
+          if source.count(old2) != 1:
+              sys.exit('::error::the verify() report is gone from scripts/unixnu/bootimg.py; upstream changed it')
+          path.write_text(source.replace(old2, new2))
+          print('verify() now reads a v3/v4 boot image header')
+          PY
+          python3 -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/unixnu/bootimg.py').read_text()); print('bootimg.py still parses')"
+
       - name: Build the boot image
         id: bootimg
         if: env.BOOTIMG == 'true'
