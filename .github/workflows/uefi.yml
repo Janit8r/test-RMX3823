@@ -114,6 +114,7 @@ jobs:
               -o DPkg::Lock::Timeout=120 \
               build-essential uuid-dev iasl nasm device-tree-compiler \
               clang lld llvm gcc-aarch64-linux-gnu mtools \
+              mono-devel ca-certificates-mono \
               python3 python3-pip python3-venv git curl gettext || exit 1
 
           # EDK II's python tooling. DeviceBuild.py imports these modules and
@@ -136,7 +137,9 @@ jobs:
           # turn BootShim.elf into the binary that gets prepended to the FD, and
           # clang alone does not provide it. The `llvm` package is what supplies
           # the unversioned symlink.
-          for tool in clang lld llvm-objcopy aarch64-linux-gnu-gcc nasm dtc git; do
+          # mono is not optional either: stuart_update resolves mu_nasm through
+          # NuGet, and NuGet refuses to run on Linux without it.
+          for tool in clang lld llvm-objcopy aarch64-linux-gnu-gcc nasm dtc mono git; do
             command -v "$tool" > /dev/null || missing="$missing $tool"
           done
           if [ -n "$missing" ]; then
