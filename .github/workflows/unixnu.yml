@@ -275,6 +275,23 @@ jobs:
             https://github.com/Project-Silicium/Mu-Silicium "$RUNNER_TEMP/Mu-Silicium"
           cd "$RUNNER_TEMP/Mu-Silicium"
           git sparse-checkout set BootShim Resources
+          # Upstream arithmetic bug: BootShim.S puts FD_SIZE in the ARM64 image
+          # size field, but the image handed to the ABL is the shim plus the
+          # firmware volume, and ./unixnu bootimg rejects any header that says
+          # otherwise. Only that one field is rewritten; the copy loop still
+          # moves exactly FD_SIZE bytes because it loads the literal, not the
+          # header value.
+          python3 - <<'PY'
+          import pathlib, re, sys
+          path = pathlib.Path('BootShim/BootShim.S')
+          source = path.read_text()
+          patched, count = re.subn(r'(\.quad\s+FD_SIZE)(\s+/\*\s*Image Size\s*\*/)',
+                                   r'\1 + (_Payload - _Head)\2', source, count=1)
+          if count != 1:
+              sys.exit('::error::the ARM64 image size line is gone from BootShim.S; upstream changed it')
+          path.write_text(patched)
+          print('BootShim.S image size now describes the shim plus the firmware volume')
+          PY
           ls BootShim/BootShim.S Resources/Scripts/mkbootimg.py
           # bootimg reads [uefi_fd] from Resources/Configs/<config>.toml, and the
           # device tree comes from the board repository, so only the config is
