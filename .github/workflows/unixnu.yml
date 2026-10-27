@@ -445,6 +445,7 @@ jobs:
           echo "boot image from $image"
           mkdir -p "$RUNNER_TEMP/artifacts"
           cp "$image" "$RUNNER_TEMP/artifacts/rmx3823-boot.img"
+          cp "$(dirname "$image")/boot.json" "$RUNNER_TEMP/artifacts/rmx3823-boot.json" 2>/dev/null || true
           printf 'boot.img %s bytes\n' "$(wc -c < "$RUNNER_TEMP/artifacts/rmx3823-boot.img" | tr -d ' ')"
           python3 -c "
           import os, struct, sys
@@ -475,6 +476,56 @@ jobs:
           path: ${{ runner.temp }}/artifacts/rmx3823-boot.img
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish the boot image
+        if: env.BOOTIMG == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+        run: |
+          IMG="$RUNNER_TEMP/artifacts/rmx3823-boot.img"
+          if [ ! -f "$IMG" ]; then
+            echo "no boot image was produced; nothing to publish"
+            exit 0
+          fi
+          if [ -z "${DEPLOY_KEY:-}" ]; then
+            echo "::warning::secrets.DEPLOY_KEY is not set; skipping the publish step"
+            exit 0
+          fi
+          # An Actions artifact can only be downloaded with repository admin,
+          # and a deploy key can push but not read artifacts, so the image goes
+          # to a branch the same way the firmware volume does.
+          install -d -m 700 "$RUNNER_TEMP/key"
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/key/id"
+          chmod 600 "$RUNNER_TEMP/key/id"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/key/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          PUB="$RUNNER_TEMP/pub-bootimg"
+          rm -rf "$PUB"
+          mkdir -p "$PUB"
+          cd "$PUB"
+          git init -q -b bootimg-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "git@github.com:${GITHUB_REPOSITORY}.git"
+
+          cp "$IMG" ./rmx3823-boot.img
+          cp "$RUNNER_TEMP/artifacts/rmx3823-boot.json" ./rmx3823-boot.json 2>/dev/null || true
+          size=$(wc -c < rmx3823-boot.img | tr -d ' ')
+          digest=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' rmx3823-boot.img)
+          {
+            echo "commit  ${GITHUB_SHA}"
+            echo "run     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "date    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "size    $size bytes"
+            echo "sha256  $digest"
+          } > BUILD.txt
+          cat BUILD.txt
+          cat rmx3823-boot.json 2>/dev/null || true
+
+          git add -A
+          git commit -q -m "bootimg: rmx3823 build ${GITHUB_SHA:0:8}"
+          git push -f origin bootimg-build
+          echo "published rmx3823-boot.img ($size bytes) to the bootimg-build branch"
 
       - name: Collect the text logs
         if: always()
