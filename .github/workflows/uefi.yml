@@ -82,31 +82,60 @@ jobs:
         run: |
           # Install what the build needs ourselves rather than trusting
           # Mu-Silicium's bootstrap: setup_env.sh installs no device-tree
-          # compiler and its apt list names packages that ubuntu-24.04 does not
-          # all carry, so relying on it alone failed the first run.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            build-essential uuid-dev iasl nasm device-tree-compiler \
-            clang lld gcc-aarch64-linux-gnu mtools \
-            python3 python3-pip python3-venv git curl gettext
+          # compiler and its apt list is theirs, not a description of this
+          # build. Job logs need repository admin to download while annotations
+          # do not, so every failure here reports the real error text as an
+          # annotation instead of only an exit code.
+          LOG="$RUNNER_TEMP/host-tools.log"
+          : > "$LOG"
 
-          # EDK II's python tooling, which provides the `stuart` entry point that
+          report() {
+            echo "::error::$1"
+            echo "--- $1 ---"
+            tail -n 60 "$LOG" | grep -inE 'error|fatal|cannot|unable|not found|no matching|E:' | tail -n 6 || true
+            tail -n 30 "$LOG" || true
+          }
+          run_step() {
+            desc="$1"; shift
+            printf '\n===== %s: %s =====\n' "$desc" "$*" >> "$LOG"
+            if ! "$@" >> "$LOG" 2>&1; then report "$desc failed: $*"; return 1; fi
+            echo "ok    $desc"
+          }
+
+          run_step "apt-get update"  sudo apt-get update -qq || exit 1
+          run_step "apt-get install" sudo apt-get install -y -qq --no-install-recommends \
+              build-essential uuid-dev iasl nasm device-tree-compiler \
+              clang lld gcc-aarch64-linux-gnu mtools \
+              python3 python3-pip python3-venv git curl gettext || exit 1
+
+          # EDK II's python tooling provides the `stuart` entry point that
           # DeviceBuild.py re-executes. --break-system-packages is required on
           # 24.04; fall back to a user install and put both on PATH either way.
-          python3 -m pip install -q --break-system-packages -r Mu-Silicium/pip-requirements.txt \
-            || python3 -m pip install -q --user -r Mu-Silicium/pip-requirements.txt
+          if ! run_step "pip requirements" \
+              python3 -m pip install -q --break-system-packages -r Mu-Silicium/pip-requirements.txt; then
+            run_step "pip requirements (user)" \
+              python3 -m pip install -q --user -r Mu-Silicium/pip-requirements.txt || exit 1
+          fi
+
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "/usr/local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
-          # Keep Mu-Silicium's own bootstrap for anything the list above missed,
-          # but do not let its apt step decide whether the build runs.
-          ( cd Mu-Silicium && bash ./setup_env.sh -p apt ) \
+          ( cd Mu-Silicium && bash ./setup_env.sh -p apt ) >> "$LOG" 2>&1 \
             || echo "::warning::Mu-Silicium setup_env.sh reported a problem; the checks below are authoritative"
 
+          missing=""
           for tool in clang lld aarch64-linux-gnu-gcc nasm dtc stuart git; do
-            command -v "$tool" > /dev/null || { echo "::error::missing $tool after setup"; exit 1; }
+            command -v "$tool" > /dev/null || missing="$missing $tool"
           done
+          if [ -n "$missing" ]; then
+            echo "::error::missing after install:$missing"
+            echo "PATH=$PATH"
+            echo "--- /usr/local/bin ---"; ls -1 /usr/local/bin | head -n 30
+            echo "--- ~/.local/bin ---";  ls -1 "$HOME/.local/bin" 2>/dev/null | head -n 30
+            echo "--- pip show ---"; python3 -m pip show edk2-pytool-extensions 2>&1 | head -n 6
+            exit 1
+          fi
           python3 -c 'import edk2toolext, edk2toollib; print("edk2 pytools ok")'
           clang --version | head -n 1
           aarch64-linux-gnu-gcc --version | head -n 1
