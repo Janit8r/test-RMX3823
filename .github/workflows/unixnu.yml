@@ -416,19 +416,41 @@ jobs:
       - name: Stage the boot image
         if: env.BOOTIMG == 'true'
         run: |
-          image=$(find unixnu/out -name boot.img -type f | head -n 1)
-          [ -n "$image" ] || { echo "::error::the boot image step produced no boot.img"; exit 1; }
+          # ./unixnu bootimg writes out/boot/boot.img. Other boot.img files can
+          # exist under out/ (a fetched IPSW unpacks its own), so prefer that
+          # path and list every candidate when it is missing.
+          image=$(find unixnu/out/boot -name boot.img -type f 2>/dev/null | head -n 1)
+          if [ -z "$image" ]; then
+            image=$(find unixnu/out -name boot.img -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::the boot image step produced no boot.img"
+            find unixnu/out -name 'boot.img*' 2>/dev/null | sed -n '1,20p' || true
+            exit 1
+          fi
+          echo "boot image from $image"
           mkdir -p "$RUNNER_TEMP/artifacts"
           cp "$image" "$RUNNER_TEMP/artifacts/rmx3823-boot.img"
           printf 'boot.img %s bytes\n' "$(wc -c < "$RUNNER_TEMP/artifacts/rmx3823-boot.img" | tr -d ' ')"
           python3 -c "
-          import struct, sys
-          data = open(sys.argv[1], 'rb').read(0x1000)
-          if data[8:16] != b'ANDROID!':
+          import os, struct, sys
+          path = sys.argv[1]
+          with open(path, 'rb') as stream:
+              data = stream.read(0x1000)
+          # The magic is at offset 0 in every header version, v4 included.
+          if data[:8] != b'ANDROID!':
               sys.exit('::error::the boot image does not start with ANDROID!')
           version = struct.unpack_from('<I', data, 0x28)[0]
-          page = struct.unpack_from('<I', data, 0x24)[0]
-          print('android boot image header v%d, page size %d' % (version, page))
+          kernel_size = struct.unpack_from('<I', data, 8)[0]
+          if version >= 3:
+              # A v3/v4 header has no page size field: mkbootimg pads the header
+              # to 4096 and that is where the payload starts.
+              page, ramdisk_size = 4096, struct.unpack_from('<I', data, 12)[0]
+          else:
+              page = struct.unpack_from('<I', data, 0x24)[0]
+              ramdisk_size = struct.unpack_from('<I', data, 16)[0]
+          print('android boot image header v%d, page size %d, kernel %d bytes, ramdisk %d bytes, file %d bytes'
+                % (version, page, kernel_size, ramdisk_size, os.path.getsize(path)))
           " "$RUNNER_TEMP/artifacts/rmx3823-boot.img"
 
       - name: Upload the boot image
