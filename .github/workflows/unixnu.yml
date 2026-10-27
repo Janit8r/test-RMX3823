@@ -89,6 +89,19 @@ jobs:
           path: unixnu
           persist-credentials: false
 
+      - name: Initialise the UniXNU submodules
+        working-directory: unixnu
+        run: |
+          # Every driver and kit is a git submodule, and the OS profile's patch
+          # series resolves patches inside them: without this, defconfig dies
+          # with 'patch missing: kits/XnuPrelink/patches/...' before a single
+          # file is compiled. --depth is left off on purpose because the pinned
+          # commits are usually not the branch tip, and a shallow fetch then
+          # fails on an unadvertised object.
+          git submodule update --init --recursive --jobs 4
+          git submodule status --recursive | sed -n '1,25p'
+          ls kits/XnuPrelink/patches | head -n 10
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
