@@ -56,9 +56,11 @@ env:
   HOMEBREW_NO_INSTALL_CLEANUP: 1
   HOMEBREW_NO_ENV_HINTS: 1
   UNIXNU_REF: ${{ inputs.unixnu_ref || 'main' }}
-  STEPS: ${{ inputs.steps || 'kernel' }}
+  # A tag push carries no inputs, so the tag name selects the step set:
+  # unixnu-v4-bootimg packs the boot image as well, a plain unixnu-vN does not.
+  STEPS: ${{ inputs.steps || (contains(github.ref_name, 'bootimg') && 'kernel+bootimg') || 'kernel' }}
   UNIXNU_IPSW: ${{ inputs.ipsw_url || '' }}
-  BOOTIMG: ${{ contains(inputs.steps, 'bootimg') }}
+  BOOTIMG: ${{ contains(inputs.steps, 'bootimg') || contains(github.ref_name, 'bootimg') }}
 
 defaults:
   run:
