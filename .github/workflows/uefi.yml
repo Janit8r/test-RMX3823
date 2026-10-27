@@ -169,10 +169,26 @@ jobs:
           cd Mu-Silicium
           # pip-requirements.txt is already installed by the toolchain step; not
           # repeating it here keeps the build step free of network waits.
+          LOG="$RUNNER_TEMP/build.log"
+          : > "$LOG"
           args=(-d rmx3823 -r "$TARGET")
           if [ "$CLEAN" = true ]; then args+=(-c); fi
           echo "python3 build_uefi.py ${args[*]}"
-          python3 build_uefi.py "${args[@]}"
+          # pipefail is on, so $? is build_uefi.py's own status. On failure the
+          # tail of the log goes out as annotations, because the job log itself
+          # needs repository admin to download.
+          set +e
+          python3 build_uefi.py "${args[@]}" 2>&1 | tee "$LOG"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::build_uefi.py exited $rc"
+            echo "::error::Build=$([ -d Build ] && echo present || echo absent) Conf=$([ -d Conf ] && echo present || echo absent) BootShim.bin=$([ -f BootShim/BootShim.bin ] && echo present || echo absent)"
+            tail -n 8 "$LOG" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::log: $line"
+            done
+            exit "$rc"
+          fi
           df -h "$GITHUB_WORKSPACE"
 
       - name: Verify the firmware volume
@@ -226,7 +242,15 @@ jobs:
             echo "The firmware volume must be exactly \`0x300000\` bytes: that is the"
             echo "window \`uefi/configs/rmx3823.toml\` gives BootShim."
             echo
+            echo "### Verification"
+            echo
             echo '```'
             tail -n 25 verify-fd.txt 2>/dev/null || echo "no verification output"
+            echo '```'
+            echo
+            echo "### build_uefi.py (last 60 lines)"
+            echo
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/build.log" 2>/dev/null || echo "no build log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
