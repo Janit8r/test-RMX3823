@@ -253,8 +253,18 @@ jobs:
           echo "firmware volume from run $RUN_ID"
           mkdir -p "$RUNNER_TEMP/fd"
           gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n silicium-uefi-rmx3823 -D "$RUNNER_TEMP/fd"
-          ls -l "$RUNNER_TEMP/fd"
-          python3 device/ci/verify-fd.py --fd "$RUNNER_TEMP/fd/SILICIUM_UEFI.fd" --expect-base 0xA7100000
+          # upload-artifact keeps the paths it was handed, so the volume lands at
+          # Mu-Silicium/Build/.../FV/SILICIUM_UEFI.fd rather than at the download
+          # root; looking it up by name is the only stable way to find it.
+          find "$RUNNER_TEMP/fd" -type f | sed -n '1,15p'
+          fd_path=$(find "$RUNNER_TEMP/fd" -name 'SILICIUM_UEFI.fd' -type f | head -n 1)
+          if [ -z "$fd_path" ]; then
+            echo "::error::artifact silicium-uefi-rmx3823 of run $RUN_ID has no SILICIUM_UEFI.fd"
+            exit 1
+          fi
+          echo "FD_PATH=$fd_path" >> "$GITHUB_ENV"
+          echo "firmware volume at $fd_path"
+          python3 device/ci/verify-fd.py --fd "$fd_path" --expect-base 0xA7100000
 
       - name: Fetch BootShim and mkbootimg
         if: env.BOOTIMG == 'true'
@@ -279,13 +289,24 @@ jobs:
         if: env.BOOTIMG == 'true'
         working-directory: unixnu
         run: |
+          log="$RUNNER_TEMP/unixnu-bootimg.log"
+          set +e
           ./unixnu bootimg \
             --uefi "$RUNNER_TEMP/Mu-Silicium" \
-            --fd "$RUNNER_TEMP/fd/SILICIUM_UEFI.fd" \
+            --fd "$FD_PATH" \
             --dtb "$GITHUB_WORKSPACE/device/uefi/dtb/rmx3823.dtb" \
-            --target RELEASE
+            --target RELEASE 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          set -e
           find out -name '*.img' | sort
-          df -h "$GITHUB_WORKSPACE"
+          df -h "$GITHUB_WORKSPACE" || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::packing the boot image failed with exit $rc"
+            tail -n 40 "$log" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::bootimg: $line"
+            done
+            exit "$rc"
+          fi
 
       - name: Stage the boot image
         if: env.BOOTIMG == 'true'
