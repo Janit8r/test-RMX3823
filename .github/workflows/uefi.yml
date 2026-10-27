@@ -32,9 +32,12 @@ on:
 permissions:
   contents: read
 
+# One firmware build at a time, across every ref. A new run supersedes the old
+# one: this job clones ~5 GB and compiles for the best part of an hour, so two
+# of them racing is worse than losing the older attempt.
 concurrency:
-  group: uefi-${{ github.ref }}-${{ inputs.target || 'RELEASE' }}
-  cancel-in-progress: false
+  group: uefi-firmware
+  cancel-in-progress: true
 
 env:
   SILICIUM_REF: ${{ inputs.silicium_ref || 'main' }}
@@ -80,12 +83,15 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # Install what the build needs ourselves rather than trusting
-          # Mu-Silicium's bootstrap: setup_env.sh installs no device-tree
-          # compiler and its apt list is theirs, not a description of this
-          # build. Job logs need repository admin to download while annotations
-          # do not, so every failure here reports the real error text as an
-          # annotation instead of only an exit code.
+          # Install the toolchain directly. Mu-Silicium's setup_env.sh is not
+          # used: it installs no device-tree compiler, pulls mono-devel for no
+          # reason this build needs, and on the fourth attempt sat in one step
+          # for over ten minutes. Everything it would have contributed is
+          # covered below.
+          #
+          # Job logs need repository admin to download while annotations do not,
+          # so each command is bounded by timeout and reports its own error text
+          # as an annotation instead of only an exit code.
           LOG="$RUNNER_TEMP/host-tools.log"
           : > "$LOG"
 
@@ -98,35 +104,33 @@ jobs:
           run_step() {
             desc="$1"; shift
             printf '\n===== %s: %s =====\n' "$desc" "$*" >> "$LOG"
-            if ! "$@" >> "$LOG" 2>&1; then report "$desc failed: $*"; return 1; fi
+            if ! timeout 900 "$@" >> "$LOG" 2>&1; then report "$desc failed or timed out: $*"; return 1; fi
             echo "ok    $desc"
           }
 
-          run_step "apt-get update"  sudo apt-get update -qq || exit 1
+          run_step "apt-get update" sudo apt-get update -qq \
+            -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 || exit 1
           run_step "apt-get install" sudo apt-get install -y -qq --no-install-recommends \
+              -o DPkg::Lock::Timeout=120 \
               build-essential uuid-dev iasl nasm device-tree-compiler \
               clang lld gcc-aarch64-linux-gnu mtools \
               python3 python3-pip python3-venv git curl gettext || exit 1
 
-          # EDK II's python tooling provides the `stuart` entry point that
-          # DeviceBuild.py re-executes. --break-system-packages is required on
-          # 24.04; fall back to a user install and put both on PATH either way.
+          # EDK II's python tooling. DeviceBuild.py imports these modules and
+          # calls them in-process, so there is no `stuart` binary to look for.
+          # --break-system-packages is required on 24.04.
           if ! run_step "pip requirements" \
-              python3 -m pip install -q --break-system-packages -r Mu-Silicium/pip-requirements.txt; then
+              python3 -m pip install --break-system-packages --no-input \
+              -r Mu-Silicium/pip-requirements.txt; then
             run_step "pip requirements (user)" \
-              python3 -m pip install -q --user -r Mu-Silicium/pip-requirements.txt || exit 1
+              python3 -m pip install --user --no-input \
+              -r Mu-Silicium/pip-requirements.txt || exit 1
           fi
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "/usr/local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
-          ( cd Mu-Silicium && bash ./setup_env.sh -p apt ) >> "$LOG" 2>&1 \
-            || echo "::warning::Mu-Silicium setup_env.sh reported a problem; the checks below are authoritative"
-
-          # edk2-pytool-extensions ships stuart_build / stuart_setup / stuart_update
-          # but no bare `stuart`; DeviceBuild.py imports those modules and calls
-          # them in-process, so only the python packages matter here.
           missing=""
           for tool in clang lld aarch64-linux-gnu-gcc nasm dtc git; do
             command -v "$tool" > /dev/null || missing="$missing $tool"
@@ -138,10 +142,10 @@ jobs:
             echo "--- ~/.local/bin ---";  ls -1 "$HOME/.local/bin" 2>/dev/null | head -n 30
             exit 1
           fi
-          python3 -c 'import edk2toolext, edk2toollib; print("edk2 pytools ok")'
           python3 -c 'from edk2toolext.invocables.edk2_platform_build import Edk2PlatformBuild; print("Edk2PlatformBuild importable")'
           clang --version | head -n 1
           aarch64-linux-gnu-gcc --version | head -n 1
+          df -h "$GITHUB_WORKSPACE" | tail -n 1
 
       - name: Apply the rmx3823 platform package
         run: |
@@ -163,13 +167,8 @@ jobs:
       - name: Build the firmware volume
         run: |
           cd Mu-Silicium
-          # edk2-pytool is only needed by some DeviceBuild.py implementations;
-          # installing it here keeps the build step free of surprises.
-          if [ -f pip-requirements.txt ]; then
-            python3 -m pip install -q --break-system-packages -r pip-requirements.txt \
-              || python3 -m pip install -q -r pip-requirements.txt \
-              || echo "::warning::could not install pip-requirements.txt; relying on DeviceBuild.py --setup"
-          fi
+          # pip-requirements.txt is already installed by the toolchain step; not
+          # repeating it here keeps the build step free of network waits.
           args=(-d rmx3823 -r "$TARGET")
           if [ "$CLEAN" = true ]; then args+=(-c); fi
           echo "python3 build_uefi.py ${args[*]}"
