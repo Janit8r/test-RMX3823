@@ -80,16 +80,36 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # Mu-Silicium's own bootstrap, and their CI runs exactly this. It
-          # installs clang, lld, nasm, uuid-dev, gcc-aarch64-linux-gnu (BootShim
-          # is built with the cross gcc) and the EDK II Python requirements.
-          # Deliberately not wrapped in "|| echo": if it fails the build fails
-          # later with a much worse error.
-          ( cd Mu-Silicium && bash ./setup_env.sh -p apt )
-          for tool in clang lld aarch64-linux-gnu-gcc nasm dtc git; do
+          # Install what the build needs ourselves rather than trusting
+          # Mu-Silicium's bootstrap: setup_env.sh installs no device-tree
+          # compiler and its apt list names packages that ubuntu-24.04 does not
+          # all carry, so relying on it alone failed the first run.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential uuid-dev iasl nasm device-tree-compiler \
+            clang lld gcc-aarch64-linux-gnu mtools \
+            python3 python3-pip python3-venv git curl gettext
+
+          # EDK II's python tooling, which provides the `stuart` entry point that
+          # DeviceBuild.py re-executes. --break-system-packages is required on
+          # 24.04; fall back to a user install and put both on PATH either way.
+          python3 -m pip install -q --break-system-packages -r Mu-Silicium/pip-requirements.txt \
+            || python3 -m pip install -q --user -r Mu-Silicium/pip-requirements.txt
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
+          # Keep Mu-Silicium's own bootstrap for anything the list above missed,
+          # but do not let its apt step decide whether the build runs.
+          ( cd Mu-Silicium && bash ./setup_env.sh -p apt ) \
+            || echo "::warning::Mu-Silicium setup_env.sh reported a problem; the checks below are authoritative"
+
+          for tool in clang lld aarch64-linux-gnu-gcc nasm dtc stuart git; do
             command -v "$tool" > /dev/null || { echo "::error::missing $tool after setup"; exit 1; }
           done
           python3 -c 'import edk2toolext, edk2toollib; print("edk2 pytools ok")'
+          clang --version | head -n 1
+          aarch64-linux-gnu-gcc --version | head -n 1
 
       - name: Apply the rmx3823 platform package
         run: |
