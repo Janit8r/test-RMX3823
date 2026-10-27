@@ -1,0 +1,23 @@
+# Kernel configuration: CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build script.
+# y and n are 1 and 0, a quoted string or a number is passed through, {tree} is the build tree.
+
+# Platform and CPU
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_SOURCE_PTHREAD=y
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+
+# Storage: enable after the storage area of porting.toml records register access,
+# DMA, command completion and a known-block read on RMX3823.
+# CONFIG_XNU_NATIVE_UFS is not set
+
+# GPU: enable after the GPU area records a completed submission and a rendered frame.
+# CONFIG_XNU_NATIVE_ADRENO is not set
+
+# Display: enable together with the GopFramebuffer archive.
+# CONFIG_XNU_NATIVE_LEGACY_DISPLAY is not set
+
+# Owner Data/Cache volumes: fill from the installed IPSW after the first root mount.
+# CONFIG_XNU_OWNER_DATA_VOLUME_UUID="REQUIRED"
+# CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="REQUIRED"

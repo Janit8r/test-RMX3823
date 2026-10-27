@@ -1,0 +1,126 @@
+schema_version = 2
+
+# UniXNU device repository: realme GT5 240W (RMX3823, China)
+# OPPO project number (ro.boot.prjname / oplusboot.prjname) = 23603
+# SoC: Qualcomm SM8550-AB "kalama" (Snapdragon 8 Gen 2), Adreno 740
+#
+# Stage 1 selection = platform + XNU entry only. Every driver that needs board
+# evidence stays commented out until its porting.toml area records a result.
+# Arrays replace inherited arrays, so keep the whole list when you add entries.
+
+[board]
+# Flip to false only after every REQUIRED_ value below has hardware evidence
+# and scripts/porting-record.py check passes.
+example = true
+name = "rmx3823"
+soc = "SM8550"
+soc_source = "sm8550"
+os_profile = "ipados-17.7.11-21H461"
+description = "realme GT5 240W (RMX3823 CN), SM8550, 1240x2772 OLED"
+kit = "rmx3823"
+
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
+
+# Target set, enabled one capability at a time after the matching porting.toml
+# area is implemented and verified:
+# include = [
+#   "ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot",
+#   "ShengUfs", "VirtioMmioBlock", "RamBlock", "VerifiedRoot",   # storage / root
+#   "GopFramebuffer",                                            # display
+#   "QcomGeniSpi", "ShengHidInput",                              # touch / keys
+#   "Adreno740", "AdrenoMetal", "Sm8550Platform", "AdrenoFirmware", "AdrenoPM4", "AirNir",  # GPU
+#   "Ath12kWifi",                                                # Wi-Fi (wcn7850)
+#   "AppleKeyStoreState",                                        # keystore state
+# ]
+
+[kernel]
+defconfig = "rmx3823_defconfig"
+config_fragments = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# Add "component:<ID>" entries in dependency order as components land.
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  "build-mockfs-fixture.py",
+  "build-libpthread-kernel.py",
+]
+
+[device_tree]
+source = "device:dts/rmx3823.dts"
+include_dirs = ["soc:dts"]
+
+[firmware]
+# Requires a new Mu-Silicium platform package: Platforms/Realme/rmx3823Pkg.
+# Derive it from Platforms/OnePlus/salamiPkg (SM8550, same OPPO ABL family)
+# with uefi/apply.sh and Platforms/Realme/senna_bcPkg (realme 240W bootloader
+# quirks).
+config = "rmx3823"
+dsc = "Platforms/Realme/rmx3823Pkg/rmx3823.dsc"
+fd = "Build/rmx3823Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-rmx3823.py"]
+# The same set UniXNU-sheng initialises: Mu_Basecore is provided separately by
+# the package step, and the openssl pin is what Silicon/Silicium needs.
+submodules = [
+  "Common/Mu",
+  "Common/Mu_OEM_Sample",
+  "Silicium-ACPI",
+  "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl",
+]
+packages = [
+  "{uefi}",
+  "{uefi}/Platforms/Realme",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/Qualcomm",
+  "{uefi}/Silicon/Silicium",
+  "{uefi}/Silicium-ACPI",
+  "{uefi}/Silicium-ACPI/Platforms/Realme",
+  "{uefi}/Silicium-ACPI/Silicon/Qualcomm",
+]
+
+[firmware.defines]
+DEVICE_MODEL = "rmx3823"
+ENABLE_SECUREBOOT = "1"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "rmx3823-research"
+
+[payload]
+volume = "RMX3823ESP"
+size_mib = 192
+loader = "firmware"
+title = "UniXNU"
+# Must equal the single DRAM window in dts/rmx3823.dts; the ADT generator
+# rejects a mismatch. 2 GiB at 0x80000000 follows UniXNU-sheng.
+dram_size = "0x80000000"
+panic_screen = true
+kernel_args = ["-v", "serial=3"]
+
+[payload.adt]
+chip_id = "207"
+# 256 MiB..8 GiB in 2 MiB steps. sheng uses 0x130000000; this value has NOT been
+# verified on rmx3823 yet, so the payload step is still blocked on it.
+owned_memory_size = "REQUIRED_OWNED_MEMORY_SIZE"
+# Produced by the first install; unknown until then.
+root_match_volume_uuid = "REQUIRED_ROOT_VOLUME_UUID"
+packed_data_ramdisk = true
+persistent_data = true
+unique_chip_id = "required"
+
+# Stock kalama bootloaders append the splash reservation to the UEFI FDT.
+# Values measured on this unit: reserved-memory/splash_region is
+# 0xB8000000 + 0x02B00000, matching MemoryMapLib's "Display Reserved" window.
+[[bootimg.dtb_node]]
+path = "/reserved-memory/splash_region"
+props = [
+  { name = "label", type = "s", value = "cont_splash_region" },
+  { name = "reg", type = "x", value = ["0x0", "0xb8000000", "0x0", "0x2b00000"] },
+]

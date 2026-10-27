@@ -1,0 +1,34 @@
+# Required firmware inputs: relative path | source | SHA-256 | consumer
+#
+# Paths are relative to .cache/firmware in this repository. Extract them from the
+# matching ColorOS/realme UI build for RMX3823 (project 23603); never copy sheng's
+# or salami's blobs. Fill the SHA-256 of every file before publishing and list the
+# firmware version (ro.build.display.id) in porting.toml.
+#
+# format: path | source | sha256 | consumer
+
+# --- GPU (Adreno 740) -------------------------------------------------------
+# a740_sqe.fw          | RMX3823 vendor/firmware | REQUIRED | AdrenoFirmware
+# a740_gmu.bin         | RMX3823 vendor/firmware | REQUIRED | AdrenoFirmware
+# a740_zap.mbn         | RMX3823 vendor/firmware | REQUIRED | AdrenoFirmware
+# a740_zap.mdt         | RMX3823 vendor/firmware | REQUIRED | AdrenoFirmware
+
+# --- ADSP / audio -----------------------------------------------------------
+# adsp.mdt             | RMX3823 vendor/firmware | REQUIRED | AdspProbe / AudioProbe
+# adsp.b00 .. adsp.b1x | RMX3823 vendor/firmware | REQUIRED | AdspProbe / AudioProbe
+# adspr.jsn            | RMX3823 vendor/firmware | REQUIRED | AdspProbe
+# adspua.jsn           | RMX3823 vendor/firmware | REQUIRED | AdspProbe
+
+# --- Wi-Fi (confirm the actual chip: wcn7850 / FastConnect 7800 expected) ----
+# wlan/amss.bin        | RMX3823 vendor/firmware | REQUIRED | Ath12kWifi
+# wlan/m3.bin          | RMX3823 vendor/firmware | REQUIRED | Ath12kWifi
+# wlan/board-2.bin     | RMX3823 vendor/firmware | REQUIRED | Ath12kWifi
+# wlan/bdwlan.bin      | RMX3823 vendor/firmware | REQUIRED | Ath12kWifi
+
+# --- Touch (identify the controller first: TWRP tree loads goodix_ts,
+#     gt9916, gt9966, synaptics and tcm_S3910 for this OPPO SM8550 family) -----
+# touch firmware       | RMX3823 vendor/firmware | REQUIRED | touch driver
+
+# --- Panel ----------------------------------------------------------------
+# Panel init is compiled into the stock kernel driver. If the UEFI DTB does not
+# already light the panel, record the DSI command sequence in the display area.

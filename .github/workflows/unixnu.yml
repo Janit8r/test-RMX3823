@@ -1,0 +1,280 @@
+name: UniXNU build
+
+# Runs the Mac-only half of the port on a GitHub macOS runner: ./unixnu drives
+# Xcode, unifdef, lld and mtools to produce kernel.macho and, once a firmware
+# volume exists, the boot image. Nothing is uploaded except the boot image and
+# text logs; the IPSW members and the kernel itself are Apple software and stay
+# on the runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: What to build
+        type: choice
+        options: [kernel, kernel+bootimg]
+        default: kernel
+      xcode:
+        description: Xcode version of the macos-26 image (/Applications/Xcode_<version>.app)
+        required: true
+        default: "26.6"
+      unixnu_ref:
+        description: UniXNU branch, tag or commit
+        required: true
+        default: main
+      fd_run_id:
+        description: Run id of a successful "UEFI firmware" run (empty picks the latest one)
+        required: false
+        default: ""
+      ipsw_url:
+        description: IPSW URL (empty uses board.toml)
+        required: false
+        default: ""
+      allow_example:
+        description: Patch example = true to false in the runner checkout so ./unixnu build is allowed
+        type: boolean
+        default: true
+      use_deploy_key:
+        description: Check the device repository out over SSH with the DEPLOY_KEY secret
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read          # gh run download reads artifacts of another workflow
+
+concurrency:
+  group: unixnu-${{ github.ref }}-${{ inputs.steps }}
+  cancel-in-progress: false
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+  UNIXNU_REF: ${{ inputs.unixnu_ref || 'main' }}
+  STEPS: ${{ inputs.steps || 'kernel' }}
+  UNIXNU_IPSW: ${{ inputs.ipsw_url || '' }}
+  BOOTIMG: ${{ contains(inputs.steps, 'bootimg') }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build with XNU
+    # macos-26 is arm64 and carries the Xcode 26 line the build is developed
+    # with; macos-latest has moved to images whose clang rejects -Werror flags.
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ inputs.xcode || '26.6' }}.app/Contents/Developer
+    steps:
+      - name: Check out the device repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: device
+          ssh-key: ${{ inputs.use_deploy_key && secrets.DEPLOY_KEY || '' }}
+          persist-credentials: false
+
+      - name: Check out UniXNU
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: UniXNU/UniXNU
+          ref: ${{ env.UNIXNU_REF }}
+          path: unixnu
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Allow the example board
+        if: inputs.allow_example
+        run: |
+          # board.toml keeps example = true so the repository cannot be built by
+          # accident. Flip it in the runner checkout only; nothing is committed.
+          python3 -c "import pathlib,re; p=pathlib.Path('device/board.toml'); t=p.read_text(); n=re.sub(r'(?m)^example\s*=\s*true\s*$','example = false',t,count=1); p.write_text(n); print('example flag patched' if n!=t else 'example flag already false')"
+
+      - name: Check the inputs
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ -f device/board.toml ] || fail "the device repository has no board.toml"
+          [ -f device/configs/rmx3823_defconfig ] || fail "device/configs/rmx3823_defconfig is missing"
+          [ -d "$DEVELOPER_DIR" ] || fail "Xcode not found at $DEVELOPER_DIR; installed: $(printf '%s ' /Applications/Xcode_*.app)"
+          python3 device/ci/verify-repo.py --root device --unixnu unixnu
+
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc
+          if ! command -v unifdef >/dev/null; then
+            brew install unifdef
+            echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Report the runner toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --find mig
+          clang --version | head -n 1
+          "$(brew --prefix llvm)/bin/clang" --version | head -n 1
+          python3 --version
+          missing=0
+          for tool in git make clang cmake ninja unifdef ld.lld mformat mcopy dtc xcodebuild; do
+            path=$(command -v "$tool" || true)
+            printf '%-10s %s\n' "$tool" "${path:-MISSING}"
+            [ -n "$path" ] || missing=1
+          done
+          df -h "$GITHUB_WORKSPACE"
+          exit "$missing"
+
+      - name: Select the board
+        working-directory: unixnu
+        run: |
+          ./unixnu defconfig rmx3823_defconfig -D "$GITHUB_WORKSPACE/device"
+          ./unixnu status
+
+      - name: Fetch the sources
+        working-directory: unixnu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./unixnu fetch
+          ./unixnu status --json > "$RUNNER_TEMP/status.json"
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Build the kernel
+        id: kernel
+        working-directory: unixnu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./unixnu build kernel
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Fetch the firmware volume
+        if: env.BOOTIMG == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.fd_run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" -w "UEFI firmware" -s success -L 1 \
+              --json databaseId -q '.[0].databaseId')
+          fi
+          [ -n "$RUN_ID" ] || { echo "::error::no successful UEFI firmware run; dispatch that workflow first"; exit 1; }
+          echo "firmware volume from run $RUN_ID"
+          mkdir -p "$RUNNER_TEMP/fd"
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n silicium-uefi-rmx3823 -D "$RUNNER_TEMP/fd"
+          ls -l "$RUNNER_TEMP/fd"
+          python3 device/ci/verify-fd.py --fd "$RUNNER_TEMP/fd/SILICIUM_UEFI.fd" --expect-base 0xA7100000
+
+      - name: Fetch BootShim and mkbootimg
+        if: env.BOOTIMG == 'true'
+        run: |
+          # Only the main repository is needed: BootShim/BootShim.S and
+          # Resources/Scripts/mkbootimg.py. The submodules are not.
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/Project-Silicium/Mu-Silicium "$RUNNER_TEMP/Mu-Silicium"
+          cd "$RUNNER_TEMP/Mu-Silicium"
+          git sparse-checkout set BootShim Resources
+          ls BootShim/BootShim.S Resources/Scripts/mkbootimg.py
+          # bootimg reads [uefi_fd] from Resources/Configs/<config>.toml, and the
+          # device tree comes from the board repository, so only the config is
+          # installed here. apply.sh needs the full package tree, which is not
+          # checked out in this sparse clone.
+          mkdir -p Resources/Configs Resources/DTBs
+          cp "$GITHUB_WORKSPACE/device/uefi/configs/rmx3823.toml" Resources/Configs/rmx3823.toml
+          cp "$GITHUB_WORKSPACE/device/uefi/dtb/rmx3823.dtb" Resources/DTBs/rmx3823.dtb
+
+      - name: Build the boot image
+        id: bootimg
+        if: env.BOOTIMG == 'true'
+        working-directory: unixnu
+        run: |
+          ./unixnu bootimg \
+            --uefi "$RUNNER_TEMP/Mu-Silicium" \
+            --fd "$RUNNER_TEMP/fd/SILICIUM_UEFI.fd" \
+            --dtb "$GITHUB_WORKSPACE/device/uefi/dtb/rmx3823.dtb" \
+            --target RELEASE
+          find out -name '*.img' | sort
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Stage the boot image
+        if: env.BOOTIMG == 'true'
+        run: |
+          image=$(find unixnu/out -name boot.img -type f | head -n 1)
+          [ -n "$image" ] || { echo "::error::the boot image step produced no boot.img"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          cp "$image" "$RUNNER_TEMP/artifacts/rmx3823-boot.img"
+          printf 'boot.img %s bytes\n' "$(wc -c < "$RUNNER_TEMP/artifacts/rmx3823-boot.img" | tr -d ' ')"
+          python3 -c "
+          import struct, sys
+          data = open(sys.argv[1], 'rb').read(0x1000)
+          if data[8:16] != b'ANDROID!':
+              sys.exit('::error::the boot image does not start with ANDROID!')
+          version = struct.unpack_from('<I', data, 0x28)[0]
+          page = struct.unpack_from('<I', data, 0x24)[0]
+          print('android boot image header v%d, page size %d' % (version, page))
+          " "$RUNNER_TEMP/artifacts/rmx3823-boot.img"
+
+      - name: Upload the boot image
+        if: env.BOOTIMG == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unixnu-rmx3823-bootimg
+          path: ${{ runner.temp }}/artifacts/rmx3823-boot.img
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Collect the text logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          find unixnu/out -name '*.log' -size -4M 2>/dev/null | while read -r log; do
+            cp "$log" "$RUNNER_TEMP/logs/$(echo "$log" | tr '/' '_')"
+          done || true
+          ls -l "$RUNNER_TEMP/logs" | head -n 40 || true
+
+      - name: Upload the build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unixnu-rmx3823-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove proprietary inputs
+        if: always()
+        run: |
+          rm -rf unixnu/out/ipsw unixnu/out/feeds
+          find unixnu/out -type d -name .cache -prune -exec rm -rf {} + 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/fd" "$RUNNER_TEMP/Mu-Silicium" "$RUNNER_TEMP/artifacts"
+
+      - name: Summary
+        if: always()
+        env:
+          KERNEL: ${{ steps.kernel.outcome }}
+          BOOTIMG_RESULT: ${{ steps.bootimg.outcome }}
+        run: |
+          {
+            echo "## UniXNU build: rmx3823"
+            echo
+            echo "| Step | Result |"
+            echo "| --- | --- |"
+            echo "| kernel | ${KERNEL:-skipped} |"
+            echo "| bootimg | ${BOOTIMG_RESULT:-skipped} |"
+            echo
+            echo "UniXNU \`${UNIXNU_REF}\`, steps \`${STEPS}\`."
+            echo
+            echo "First attempt on the device is always a boot, never a flash:"
+            echo '```'
+            echo "fastboot boot rmx3823-boot.img"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

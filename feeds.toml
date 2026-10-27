@@ -1,0 +1,8 @@
+# Pin the reviewed SM8550 shared support commit.
+# The revision below is the one components.toml references for Sm8550Platform;
+# re-review it against UniXNU-sm8550-common HEAD before publishing.
+[[source]]
+name = "sm8550"
+kind = "soc"
+git = "https://github.com/UniXNU/UniXNU-sm8550-common"
+commit = "23b2049fcd9e30356161def84231334fb55ecca9"

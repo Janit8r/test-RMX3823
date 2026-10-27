@@ -1,0 +1,49 @@
+# Mu-Silicium device configuration for realme GT5 240W (RMX3823).
+# Read by build_uefi.py and by UniXNU's `unixnu build firmware`.
+#
+# Every value below was measured on the device. The two that matter most are
+# [uefi_fd] base/size: they must equal the "UEFI FD" entry in MemoryMapLib.c,
+# and they must sit in a range the real ABL leaves unused. A mismatch shows up
+# as a reset loop or a silent hang before any output.
+
+#
+# Boot Shim Configs
+#
+[boot_shim]
+requires_kernel_header = true
+
+#
+# UEFI FD Configs
+#
+# size is not a guess: the stock uefi_a partition holds an ELF wrapping a single
+# firmware volume of exactly 0x300000 bytes with a 0x48 header.
+# base 0xA7100000 sits inside the free gap 0xA4F08000..0xA7605000 that the
+# board's own reserved-memory leaves unclaimed; the FD block ends at
+# 0xA8000000, which is exactly where the ABL loads the kernel and therefore
+# where the UniXNU boot image will land.
+#
+[uefi_fd]
+base = 0xA7100000
+size = 0x300000
+
+#
+# Android Boot Image Kernel Configs
+#
+[boot_image_kernel]
+kernel_compression = "gzip"
+append_dtb         = true
+
+#
+# Android Boot Image Configs
+#
+# header_version 4 is what the OPPO kalama ABL uses: the device's own boot_a and
+# vendor_boot_a both carry a v4 header, boot_a has ramdisk_size 0 and the
+# generic ramdisk lives in init_boot.
+# os_version / os_patch_level mirror the stock boot_a being replaced
+# (qti/kalama/kalama:13/TP1A.220905.001, Android 13, patch 2026-05) so the
+# rollback index and the OPPO bootloader's version check stay satisfied.
+#
+[boot_image]
+header_version = 4
+os_version     = "13.0.0"
+os_patch_level = "2026-05"

@@ -1,0 +1,105 @@
+name: Validate
+
+# Fast checks that need no toolchain: the device tree compiles and still agrees
+# with the hardware, the memory map is internally consistent, and board.toml
+# points at files this repository actually ships. A red run here means a
+# firmware build would waste an hour, or worse, produce a boot image that hangs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  device-tree:
+    name: Device tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the device repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dtc
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+          dtc --version
+
+      - name: Compile dts/rmx3823.dts
+        run: |
+          dtc -I dts -O dtb -o "$RUNNER_TEMP/rmx3823.dtb" dts/rmx3823.dts
+          dtc -I dtb -O dts -o "$RUNNER_TEMP/rmx3823.roundtrip.dts" "$RUNNER_TEMP/rmx3823.dtb"
+          printf 'compiled %s bytes\n' "$(wc -c < "$RUNNER_TEMP/rmx3823.dtb" | tr -d ' ')"
+          grep -E '^\s*(model|compatible)' "$RUNNER_TEMP/rmx3823.roundtrip.dts" | head -n 4
+
+      - name: Compare against the live device tree
+        run: |
+          # uefi/dtb/rmx3823.dtb is the FDT the phone boots with, captured from
+          # /sys/firmware/fdt. The hand-written DTS must agree with it on memory,
+          # the CPU MPIDRs and PSCI, or the firmware will not bring up memory.
+          python3 ci/verify-dts.py \
+            --built "$RUNNER_TEMP/rmx3823.dtb" \
+            --reference uefi/dtb/rmx3823.dtb
+
+      - name: Upload the compiled device tree
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rmx3823-dtb
+          path: ${{ runner.temp }}/rmx3823.dtb
+          if-no-files-found: error
+          retention-days: 30
+
+  repository:
+    name: Repository and memory map
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the device repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check board.toml, feeds.toml and porting.toml
+        run: python3 ci/verify-repo.py
+
+      - name: Check the memory map
+        run: |
+          # The descriptor table is the file most likely to produce a silent,
+          # unbootable image: EDK II does not validate it.
+          python3 ci/verify-memmap.py uefi/platform/Library/MemoryMapLib/MemoryMapLib.c
+
+      - name: Run the firmware preflight
+        run: python3 scripts/check-rmx3823.py
+
+      - name: Check the shell scripts
+        run: |
+          for script in uefi/apply.sh; do
+            sh -n "$script"
+            printf 'ok  %s\n' "$script"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Validate: repository"
+            echo
+            echo "Checked \`board.toml\`, \`feeds.toml\`, \`porting.toml\`, the memory map"
+            echo "descriptor table and the firmware preflight."
+            echo
+            echo "The device tree is checked in the \`Device tree\` job."
+          } >> "$GITHUB_STEP_SUMMARY"

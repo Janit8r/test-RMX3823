@@ -1,0 +1,106 @@
+/dts-v1/;
+/include/ "sm8550.dtsi"
+
+/*
+ * realme GT5 240W (RMX3823 CN), OPPO project 23603, SM8550-AB kalama.
+ *
+ * This is the XNU hardware description, compiled to a DTB and converted into
+ * kernel.macho.adt. It is NOT the firmware DTB the boot image carries: that one
+ * is the device's own FDT, dumped from /sys/firmware/fdt and shipped as
+ * uefi/dtb/rmx3823.dtb.
+ *
+ * The SoC dtsi (UniXNU-sm8550-common dts/sm8550.dtsi) already declares /cpus,
+ * /psci and /soc with the GIC, UFS host and PHY, GPU, GMU and SMMU. This file
+ * only adds what is board-specific: identity, the DRAM window, the splash
+ * reservation and the CPU cluster tags. Overriding the SoC nodes would replace
+ * their accurate compatible strings with guesses.
+ *
+ * Every value was read from the running device:
+ *   /sys/firmware/fdt   model, memory, cpus, timer, psci
+ *   /proc/cmdline       oplusboot.prjname, panel, touch
+ *   /proc/iomem         register windows
+ */
+
+/ {
+    model = "realme GT5 240W";
+    compatible = "realme,rmx3823", "qcom,sm8550", "qcom,kalama";
+
+    /*
+     * One contiguous window, which is what the ADT handoff requires:
+     * scripts/unixnu/devicetree.py rejects anything else with "ADT handoff
+     * requires one contiguous DRAM range", and board.toml [payload] dram_size
+     * has to equal it exactly.
+     *
+     * 2 GiB at 0x80000000 follows UniXNU-sheng, the reference SM8550 port. The
+     * device's own /memory is 23.61 GiB in 7 ranges, but only this low window is
+     * declared because XNU is handed one range and the payload's owned memory
+     * is sized from it. Inside this window the device backs 1.85 GiB; the
+     * remaining 155 MiB are the holes at 0x80E00000..0x811D0000 (3.9 MiB) and
+     * 0xD8000000..0xE1BB0000, which hold no DRAM. ci/verify-dts.py prints both
+     * numbers on every run so a wrong window cannot pass unnoticed.
+     *
+     * Raising this to the full 4 GiB or beyond is a post-first-boot change: it
+     * needs the reserved-memory set turned into ADT reservations first.
+     */
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0 0x80000000 0 0x80000000>;
+    };
+
+    /*
+     * The stock bootloader appends this reservation to the UEFI FDT, and
+     * board.toml [[bootimg.dtb_node]] rewrites the same path when packing the
+     * boot image. Both must agree with the device: splash_region is
+     * 0xB8000000 + 0x02B00000 on this unit, which is also the "Display
+     * Reserved" window in MemoryMapLib.
+     */
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+
+        splash_region: framebuffer@b8000000 {
+            label = "cont_splash_region";
+            reg = <0 0xb8000000 0 0x2b00000>;
+            no-map;
+        };
+    };
+};
+
+/*
+ * Three clusters on this board: cpu0..cpu2 are Cortex-A510 (E), cpu3..cpu7 are
+ * A715/A710/X3 (P). The MPIDR affinities and the compatible strings come from
+ * the SoC dtsi; only the cluster tag is added here.
+ */
+&cpu0 { unixnu,cluster-type = "E"; };
+&cpu1 { unixnu,cluster-type = "E"; };
+&cpu2 { unixnu,cluster-type = "E"; };
+&cpu3 { unixnu,cluster-type = "P"; };
+&cpu4 { unixnu,cluster-type = "P"; };
+&cpu5 { unixnu,cluster-type = "P"; };
+&cpu6 { unixnu,cluster-type = "P"; };
+&cpu7 { unixnu,cluster-type = "P"; };
+
+/*
+ * Deliberately left at the SoC dtsi defaults (disabled). Each of these is
+ * enabled by the porting.toml area that proves it on hardware:
+ *
+ *   &ufs      qcom,sm8550-ufshc at 0x01D84000, PHY 0x01D80000   storage
+ *   &gpu      qcom,adreno-43050a01 at 0x3D00000, GMU 0x3D6A000   gpu
+ *   &gpu_smmu qcom,sm8550-smmu-500 at 0x3DA0000                  gpu
+ *
+ * Reference values for the areas that are still planned, kept here so the real
+ * numbers travel with the board file instead of living in prose:
+ *
+ *   panel   qcom,mdss_dsi_oplus_zonda_tianma_nt37705_1240_2772_dsc_cmd
+ *           1240x2772, Tianma, Novatek NT37705, DSC, command mode
+ *           backlight mdss panel0-backlight, 0..2047, default 420
+ *   touch   synaptics-s3910 on QUPv3_1 SE 4 (spi@a90000)
+ *           the DT also carries goodix,gt9916 and synaptics,tcm-spi-hbp as
+ *           alternate pairings; only s3910 is wired on this unit
+ *   wifi    WCN6855 over PCIe MHI (qcom,cnss-qca-converged + qca6490)
+ *           this is an ath11k part, so Ath12kWifi cannot be selected
+ *   codec   WCD938x + 2x NXP TFA98xx on i2c 0xa98000 (0x34/0x35)
+ *   charger OPLUS SC8571 master/slave/slave-b on i2c 0x884000, SC8517 at
+ *           0x890000, BQ27541 gauge at 0x880000, PM8550 family at 0xc42d000
+ */

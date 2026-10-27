@@ -1,0 +1,166 @@
+name: UEFI firmware
+
+# Builds SILICIUM_UEFI.fd for rmx3823 with Mu-Silicium. This is the layer that
+# runs before XNU: if it does not fit the 0x300000 BootShim window, nothing
+# later matters. Linux is enough for this step, so it costs a fraction of the
+# macOS minutes the kernel build needs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      silicium_ref:
+        description: Mu-Silicium branch, tag or commit
+        required: true
+        default: main
+      binaries:
+        description: Vendor DXE binaries to link (salami = OnePlus 11, the only SM8550 OPPO set upstream)
+        type: choice
+        options: [salami, rmx3823]
+        default: salami
+      target:
+        description: EDK II build target
+        type: choice
+        options: [RELEASE, DEBUG]
+        default: RELEASE
+      clean:
+        description: Remove Build/ before compiling (slow, use after changing the DSC or FDF)
+        type: boolean
+        default: false
+  push:
+    tags: ["uefi-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uefi-${{ github.ref }}-${{ inputs.target || 'RELEASE' }}
+  cancel-in-progress: false
+
+env:
+  SILICIUM_REF: ${{ inputs.silicium_ref || 'main' }}
+  BINARIES: ${{ inputs.binaries || 'salami' }}
+  TARGET: ${{ inputs.target || 'RELEASE' }}
+  CLEAN: ${{ inputs.clean || 'false' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  firmware:
+    name: Build SILICIUM_UEFI.fd
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Check out the device repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out Mu-Silicium
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Project-Silicium/Mu-Silicium
+          ref: ${{ env.SILICIUM_REF }}
+          path: Mu-Silicium
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Report the checkout
+        run: |
+          git -C Mu-Silicium log -1 --format='Mu-Silicium %h %s (%cs)'
+          git -C Mu-Silicium submodule status | head -n 20
+          du -sh Mu-Silicium Mu-Silicium/Binaries Mu-Silicium/Common/Mu 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential uuid-dev iasl nasm python3 python3-pip \
+            python3-venv mtools device-tree-compiler
+          # Mu-Silicium's own bootstrap; it is idempotent and may complain about
+          # packages the image already provides, so its failure is not fatal here.
+          ( cd Mu-Silicium && ./setup_env.sh -p apt ) \
+            || echo "::warning::Mu-Silicium setup_env.sh reported a problem; continuing"
+
+      - name: Apply the rmx3823 platform package
+        run: |
+          sh uefi/apply.sh Mu-Silicium --binaries="$BINARIES"
+          echo
+          echo "==> resulting package"
+          find Mu-Silicium/Platforms/Realme -maxdepth 2 -type f | sort
+          grep -n "Binaries/" Mu-Silicium/Platforms/Realme/rmx3823Pkg/Include/*.inc | head -n 10 || true
+
+      - name: Build the firmware volume
+        run: |
+          cd Mu-Silicium
+          # edk2-pytool is only needed by some DeviceBuild.py implementations;
+          # installing it here keeps the build step free of surprises.
+          if [ -f pip-requirements.txt ]; then
+            python3 -m pip install -q --break-system-packages -r pip-requirements.txt \
+              || python3 -m pip install -q -r pip-requirements.txt \
+              || echo "::warning::could not install pip-requirements.txt; relying on DeviceBuild.py --setup"
+          fi
+          args=(-d rmx3823 -r "$TARGET")
+          if [ "$CLEAN" = true ]; then args+=(-c); fi
+          echo "python3 build_uefi.py ${args[*]}"
+          python3 build_uefi.py "${args[@]}"
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Verify the firmware volume
+        run: |
+          FD="Mu-Silicium/Build/rmx3823Pkg/${TARGET}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+          # Keep the exit code: piping into tail would hide a failed check.
+          if ! python3 ci/verify-fd.py --fd "$FD" --expect-base 0xA7100000 --list > verify-fd.txt; then
+            tail -n 60 verify-fd.txt
+            echo "::error::the firmware volume failed verification"
+            exit 1
+          fi
+          tail -n 40 verify-fd.txt
+
+      - name: Upload the firmware volume
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: silicium-uefi-rmx3823
+          path: |
+            Mu-Silicium/Build/rmx3823Pkg/${{ env.TARGET }}_CLANGPDB/FV/SILICIUM_UEFI.fd
+            Mu-Silicium/Build/rmx3823Pkg/${{ env.TARGET }}_CLANGPDB/FV/SILICIUM_UEFI.fd.gz
+            Mu-Silicium/Build/rmx3823Pkg/${{ env.TARGET }}_CLANGPDB/FV/SILICIUM_UEFI.fd-bootshim
+            Mu-Silicium/Build/rmx3823Pkg/${{ env.TARGET }}_CLANGPDB/FV/SILICIUM_UEFI.fd-bootshim.gz
+            verify-fd.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: silicium-uefi-logs-${{ github.run_attempt }}
+          path: |
+            Mu-Silicium/Build/**/*.log
+            Mu-Silicium/Build/**/*.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## UEFI firmware: rmx3823"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Mu-Silicium | \`${SILICIUM_REF}\` |"
+            echo "| Binaries | \`${BINARIES}\` |"
+            echo "| Target | \`${TARGET}\` |"
+            echo "| Result | ${GITHUB_JOB} |"
+            echo
+            echo "The firmware volume must be exactly \`0x300000\` bytes: that is the"
+            echo "window \`uefi/configs/rmx3823.toml\` gives BootShim."
+            echo
+            echo '```'
+            tail -n 25 verify-fd.txt 2>/dev/null || echo "no verification output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
