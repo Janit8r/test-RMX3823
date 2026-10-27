@@ -7,6 +7,10 @@ name: UniXNU build
 # on the runner.
 
 on:
+  # workflow_dispatch wants a token with actions: write, which a deploy key
+  # cannot provide; a unixnu-* tag starts the same run over an SSH push.
+  push:
+    tags: [unixnu-*]
   workflow_dispatch:
     inputs:
       steps:
@@ -44,7 +48,7 @@ permissions:
   actions: read          # gh run download reads artifacts of another workflow
 
 concurrency:
-  group: unixnu-${{ github.ref }}-${{ inputs.steps }}
+  group: unixnu-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -67,8 +71,6 @@ jobs:
     # with; macos-latest has moved to images whose clang rejects -Werror flags.
     runs-on: macos-26
     timeout-minutes: 360
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_${{ inputs.xcode || '26.6' }}.app/Contents/Developer
     steps:
       - name: Check out the device repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,17 +94,38 @@ jobs:
           python-version: "3.13"
 
       - name: Allow the example board
-        if: inputs.allow_example
+        # A tag push carries no inputs, and the example flag still has to be
+        # patched or ./unixnu refuses the board outright.
+        if: github.event_name != 'workflow_dispatch' || inputs.allow_example
         run: |
           # board.toml keeps example = true so the repository cannot be built by
           # accident. Flip it in the runner checkout only; nothing is committed.
           python3 -c "import pathlib,re; p=pathlib.Path('device/board.toml'); t=p.read_text(); n=re.sub(r'(?m)^example\s*=\s*true\s*$','example = false',t,count=1); p.write_text(n); print('example flag patched' if n!=t else 'example flag already false')"
+
+      - name: Select Xcode
+        run: |
+          # The image carries one Xcode point release, not every one. Prefer the
+          # requested version and fall back to the newest installed app, so a
+          # 26.x rollover does not burn a whole run on a missing path.
+          want="/Applications/Xcode_${{ inputs.xcode || '26.6' }}.app"
+          if [ -d "$want" ]; then
+            chosen="$want"
+          else
+            chosen=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          if [ -z "$chosen" ] || [ ! -d "$chosen" ]; then
+            echo "::error::no Xcode under /Applications; wanted $want; found: $(ls -d /Applications/Xcode_*.app 2>/dev/null | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$chosen/Contents/Developer" >> "$GITHUB_ENV"
+          echo "selected $chosen"
 
       - name: Check the inputs
         run: |
           fail() { echo "::error::$1"; exit 1; }
           [ -f device/board.toml ] || fail "the device repository has no board.toml"
           [ -f device/configs/rmx3823_defconfig ] || fail "device/configs/rmx3823_defconfig is missing"
+          [ -x unixnu/unixnu ] || fail "unixnu/unixnu is missing or not executable"
           [ -d "$DEVELOPER_DIR" ] || fail "Xcode not found at $DEVELOPER_DIR; installed: $(printf '%s ' /Applications/Xcode_*.app)"
           python3 device/ci/verify-repo.py --root device --unixnu unixnu
 
