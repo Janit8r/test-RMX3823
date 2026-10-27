@@ -18,6 +18,7 @@ Zero dependencies (stdlib only). Exit 0 = pass, 1 = fail, 2 = bad invocation.
 
 import argparse
 import gzip
+import lzma
 import struct
 import sys
 import zlib
@@ -76,14 +77,57 @@ def find_fv(data):
         pos += 1
 
 
+def edk2_lzma(blob):
+    """EDK2's LzmaCompress output: 5 header bytes, then a raw LZMA1 stream.
+
+    The header is one properties byte (lc + lp * 9 + pb * 45) and a 4-byte
+    little-endian dictionary size. That is the .lzma container minus its 8-byte
+    uncompressed-size field, which is why lzma.decompress() cannot read it.
+    Mu-Silicium wraps FVMAIN in a GUIDED section with the LZMA GUID
+    EE4E5898-3914-4259-9D6E-DC7BD79403CF, so this is the path that matters for
+    a firmware volume we build ourselves.
+    """
+    if len(blob) < 6:
+        return None
+    props = blob[0]
+    if props > 224:
+        return None
+    dict_size = int.from_bytes(blob[1:5], "little")
+    if not 0x1000 <= dict_size <= 0x10000000:
+        return None
+    lc = props % 9
+    lp = (props // 9) % 5
+    pb = props // 45
+    if lc + lp > 4:
+        return None
+    filters = [{"id": lzma.FILTER_LZMA1, "lc": lc, "lp": lp, "pb": pb, "dict_size": dict_size}]
+    try:
+        return lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters).decompress(blob[5:])
+    except (lzma.LZMAError, ValueError, EOFError):
+        return None
+
+
 def decompress(blob):
-    """EDK II GUIDED sections in this family are gzip; accept zlib/deflate too."""
-    for attempt in (gzip.decompress, zlib.decompress,
-                    lambda b: zlib.decompress(b, -zlib.MAX_WBITS)):
+    """Decode a GUIDED section payload.
+
+    The stock OPPO image uses gzip; a Mu-Silicium build uses LZMA. Accept both,
+    plus the zlib/deflate and .lzma/.xz variants, and return the first result
+    that actually decompresses to something.
+    """
+    attempts = (
+        gzip.decompress,
+        zlib.decompress,
+        lambda b: zlib.decompress(b, -zlib.MAX_WBITS),
+        lzma.decompress,
+        edk2_lzma,
+    )
+    for attempt in attempts:
         try:
-            return attempt(blob)
+            out = attempt(blob)
         except Exception:
             continue
+        if out:
+            return out
     return None
 
 
