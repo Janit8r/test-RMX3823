@@ -301,6 +301,39 @@ jobs:
           cp "$GITHUB_WORKSPACE/device/uefi/configs/rmx3823.toml" Resources/Configs/rmx3823.toml
           cp "$GITHUB_WORKSPACE/device/uefi/dtb/rmx3823.dtb" Resources/DTBs/rmx3823.dtb
 
+      - name: Let the device tree patch reuse an existing node
+        if: env.BOOTIMG == 'true'
+        working-directory: unixnu
+        run: |
+          # board.toml asks for /reserved-memory/splash_region, and the tree
+          # taken from the device already has that node with the same label and
+          # reg. fdtput -c calls fdt_add_subnode, which aborts with
+          # FDT_ERR_EXISTS instead of leaving the node in place, so ./unixnu
+          # bootimg dies before it ever writes a property (unixnu-v6-bootimg).
+          # Only that one call becomes idempotent: the property writes and
+          # their fdtget round-trip still check every value from board.toml.
+          python3 - <<'PY'
+          import pathlib, sys
+          path = pathlib.Path('scripts/unixnu/bootimg.py')
+          source = path.read_text()
+          old = "        run([fdtput, '-c', work, node['path']], capture=True)\n"
+          new = (
+              "        try:\n"
+              "            run([fdtput, '-c', work, node['path']], capture=True)\n"
+              "        except Error as exc:\n"
+              "            if 'FDT_ERR_EXISTS' not in str(exc):\n"
+              "                raise\n"
+              "            log('bootimg: ' + node['path'] + ' is already in the device tree')\n"
+          )
+          if source.count(old) != 1:
+              sys.exit('::error::the fdtput -c line is gone from scripts/unixnu/bootimg.py; upstream changed it')
+          path.write_text(source.replace(old, new))
+          print('patch_dtb now reuses a node the device tree already has')
+          PY
+          # Fail here rather than inside ./unixnu if the rewrite produced
+          # something that is not Python any more.
+          python3 -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/unixnu/bootimg.py').read_text()); print('bootimg.py still parses')"
+
       - name: Build the boot image
         id: bootimg
         if: env.BOOTIMG == 'true'
