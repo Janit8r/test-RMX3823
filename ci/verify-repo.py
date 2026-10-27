@@ -124,6 +124,34 @@ def main():
         if dt.get("source") != "device:dts/rmx3823.dts":
             print(f"::warning::[device_tree] source is {dt.get('source')!r}")
 
+        # Every /include/ in the board DTS must resolve. sm8550.dtsi ships in the
+        # SoC feed rather than in this repository, so it only resolves because
+        # device_tree.include_dirs points dtc at that feed. Dropping that line
+        # compiles fine here and fails on the build host, so check it now.
+        dts_file = root / "dts/rmx3823.dts"
+        if dts_file.is_file():
+            includes = re.findall(r'/include/\s+"([^"]+)"', dts_file.read_text(encoding="utf-8", errors="replace"))
+            soc_feeds = [s for s in feeds.get("source", []) if s.get("kind") == "soc"] if feeds else []
+            include_dirs = dt.get("include_dirs", [])
+            for name in includes:
+                if (root / "dts" / name).is_file():
+                    continue
+                provided = [
+                    entry for entry in include_dirs
+                    if entry.partition(":")[0] == "soc" and (Path(entry.partition(":")[2]) / name).parts
+                ]
+                if not provided:
+                    print(f"::error::dts/rmx3823.dts includes {name!r}, which this repository does not ship, "
+                          "and [device_tree] include_dirs does not point at a SoC directory that provides it")
+                    failures.append("board.toml")
+                elif not soc_feeds:
+                    print(f"::error::[device_tree] include_dirs {provided[0]!r} relies on a soc feed, "
+                          "but feeds.toml declares none")
+                    failures.append("feeds.toml")
+                else:
+                    print(f"includes    {name} from {provided[0]} "
+                          f"({soc_feeds[0].get('commit', '?')[:12]})")
+
         comps = board.get("components", {}).get("include", [])
         print(f"components  {len(comps)}: {', '.join(comps)}")
 

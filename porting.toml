@@ -6,33 +6,75 @@ soc = "SM8550"
 os_profile = "ipados-17.7.11-21H461"
 summary = "realme GT5 240W (RMX3823 CN, OPPO project 23603). Stage 1: repository, SoC pin and stage-1 component selection exist; the board's own FDT, memory map and partition table have been dumped from the device and are reflected in the DTS and MemoryMapLib. No image has been built or booted yet."
 
+# Every evidence reference below is a path in this repository, so
+# scripts/porting-record.py check can verify it exists. Raw captures live in
+# evidence/ (see evidence/README.md for how each one was taken).
+
 [[area]]
 id = "configuration"
 status = "planned"
 components = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
-paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", "local.toml.example"]
 inputs = ["SM8550 SoC pin for UniXNU-sm8550-common", "iPadOS 17.7.11 profile (the only OS profile in UniXNU)", "board identity: realme RMX3823, OPPO project 23603, model RE5C33"]
-configuration = ["board.soc = SM8550; board.soc_source = sm8550; board.os_profile = ipados-17.7.11-21H461; schema_version = 2", "kernel.defconfig = rmx3823_defconfig; device_tree.source = device:dts/rmx3823.dts", "Stage-1 components: ArmDTPlatform, ArmCpu, SoftwareAES, XnuPrelink, DarwinBoot"]
+configuration = ["board.soc = SM8550; board.soc_source = sm8550; board.os_profile = ipados-17.7.11-21H461; schema_version = 2", "kernel.defconfig = rmx3823_defconfig; device_tree.source = device:dts/rmx3823.dts with device_tree.include_dirs = soc:dts", "Stage-1 components: ArmDTPlatform, ArmCpu, SoftwareAES, XnuPrelink, DarwinBoot"]
 procedure = ["Copy examples/device to UniXNU-rmx3823 and rename the defconfig and board DTS", "Run ./unixnu defconfig rmx3823_defconfig -D ../UniXNU-rmx3823, then ./unixnu fetch and ./unixnu status --json", "Review resolved profiles, source pins, overrides and patch order before adding any driver"]
-findings = ["Device identity is confirmed from the running unit, not inferred: /sys/devices/soc0/soc_id = 519 (KALAMA), /sys/firmware/fdt model = \"Qualcomm Technologies, Inc. Kalama MTP,zonda-B\", compatible \"qcom,kalama-mtp/qcom,kalama/qcom,mtp\", board-id [8,1], and /proc/cmdline carries oplusboot.prjname=23603 with verifiedbootstate=orange.", "The unit is a 24 GB / 1 TB SKU: /memory maps 23.61 GiB in 7 populated ranges and userdata is 1,004,075,544,576 bytes (935 GiB). Sizes taken from the TWRP BoardConfig (super 8.5 GiB, userdata 217 GiB) describe a smaller variant and must not be used.", "UniXNU devices.toml lists 155 devices and none of them is a realme or OPPO phone, so RMX3823 has no sibling port to copy: only the SM8550 platform layer is shared.", "Tables merge in ARM64, SoC, OS, device order; ordinary arrays replace inherited arrays, so every added component must be re-listed in full.", "The only available OS profile is iPadOS 17.7.11 (iPad7,1 / j120ap, chip_id 0x8011). A phone port therefore boots a tablet identity; panel geometry, DPI and orientation have to be supplied by the board DTS and ADT overrides."]
+findings = ["Device identity is confirmed from the running unit, not inferred: /sys/devices/soc0/soc_id = 519 (KALAMA), /sys/firmware/fdt model = 'Qualcomm Technologies, Inc. Kalama MTP,zonda-B', compatible 'qcom,kalama-mtp/qcom,kalama/qcom,mtp', board-id [8,1], and /proc/cmdline carries oplusboot.prjname=23603 with verifiedbootstate=orange.", "The unit is a 24 GB / 1 TB SKU: /memory maps 23.61 GiB in 7 populated ranges and userdata is 1,004,075,544,576 bytes (935 GiB). Sizes taken from the TWRP BoardConfig (super 8.5 GiB, userdata 217 GiB) describe a smaller variant and must not be used.", "UniXNU devices.toml lists 155 devices and none of them is a realme or OPPO phone, so RMX3823 has no sibling port to copy: only the SM8550 platform layer is shared.", "Tables merge in ARM64, SoC, OS, device order; ordinary arrays replace inherited arrays, so every added component must be re-listed in full.", "The only available OS profile is iPadOS 17.7.11 (iPad7,1 / j120ap, chip_id 0x8011). A phone port therefore boots a tablet identity; panel geometry, DPI and orientation have to be supplied by the board DTS and ADT overrides.", "dts/rmx3823.dts includes 'sm8550.dtsi', which ships in the SoC feed, not in this repository. That only resolves because board.toml sets device_tree.include_dirs = ['soc:dts']; any standalone dtc run has to pass the equivalent -i flag."]
 completion = ["All source pins resolve; status shows the intended profiles, components and patch order; porting-record.py check reports no identity errors."]
 limits = ["board.example is still true, so build and bootimg refuse this repository.", "The SoC commit in feeds.toml is the revision components.toml references for Sm8550Platform and has not been re-reviewed against UniXNU-sm8550-common HEAD."]
 next_action = ["Review UniXNU-sm8550-common at the pinned commit, then run defconfig, fetch and status --json on a Linux or macOS host."]
-evidence = ["dump/gt5/analysis/board-facts.md -- identity block generated from the device (soc_id, DT model, cmdline keys)", "dump/gt5/cmdline.txt -- full stock cmdline incl. oplusboot.prjname=23603", "dump/gt5/block-sizes.txt -- 140 partitions with real byte sizes"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "Identity block generated from the device: soc_id, DT model, compatible strings, board-id and the cmdline keys."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/cmdline.txt"
+result = "Full stock cmdline, including oplusboot.prjname=23603 and verifiedbootstate=orange."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/block-sizes.txt"
+result = "140 partitions with real byte sizes, used to reject the TWRP BoardConfig numbers."
 
 [[area]]
 id = "firmware"
 status = "planned"
 components = ["DarwinBoot", "ShengPreflight"]
-paths = ["proprietary-files.txt", "scripts/check-rmx3823.py", "board.toml"]
+paths = ["proprietary-files.txt", "scripts/check-rmx3823.py", "board.toml", "uefi/**"]
 inputs = ["Mu-Silicium platform package for RMX3823 (none exists upstream)", "the device's own FDT (dumped from /sys/firmware/fdt) as the boot-image DTB", "UEFI FD base/size and boot image header version accepted by the OPPO ABL"]
-configuration = ["firmware.config = rmx3823; firmware.dsc = Platforms/Realme/rmx3823Pkg/rmx3823.dsc; firmware.fd = Build/rmx3823Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd", "firmware.defines: ENABLE_SECUREBOOT=1, MEMORY_PROTECTION=TRUE, SHIP_MODE=FALSE", "DSC/FDF must add UniXNUPkg/Application/UniXNU, UniXNUDxe, DarwinBoot, UniXNURamDiskDxe, DiskIoDxe and FatPkg"]
-procedure = ["Derive Platforms/Realme/rmx3823Pkg from Platforms/OnePlus/salamiPkg (SM8550, OPPO ABL) and cross-check boot quirks against Platforms/Realme/senna_bcPkg", "Fill MemoryMapLib from the device's reserved-memory set, then Resources/Configs/rmx3823.toml with uefi_fd base/size and boot_image.header_version = 4", "Add Resources/DTBs/rmx3823.dtb from /sys/firmware/fdt, build with ./unixnu build firmware --uefi ../Mu-Silicium, and test with fastboot boot before flashing anything"]
-findings = ["Mu-Silicium has no SM8550 realme package: Platforms/Realme only carries bale_b (Palawan), bitra (Kona), senna_a and senna_bc (Palima). salami (OnePlus 11) is the only kalama OPPO-family package and the closest template.", "uefi_fd size is now a measured value, not a copy: the stock uefi_a partition holds an ELF wrapping a single FV of exactly 0x300000 bytes with a 0x48 header (3,006,856 bytes used, 138,800 free). base 0xA7100000 is confirmed to sit inside a free gap: the board's own reservations leave 0xA4F08000..0xA7605000 unclaimed.", "The kalama stock bootloader injects oplusboot.* and device_info.* into the DTB, so the firmware DTB must be the device's own tree. The project-root uefi.img is NOT it: that FD contains OplusStorageDxe/OplusProject/PhoenixDxe and an X.509 subject of \"OPLUS SM8650 Attestation\", i.e. it was built for SM8650, while this unit reports soc_id 519 (KALAMA) running kernel 5.15.180-android13-8. Use the dumped uefi_a as the DXE reference instead.", "The whole salami window block transfers unchanged because both boards are OPPO-family kalama: the device DT reserves 0xA7605000 (bootloader log) and 0xB8000000 + 0x2B00000 (cont_splash_region) at exactly salami's Log Buffer and Display Reserved addresses, and the largest free gap starts at exactly salami's DXE Heap base 0xBAB00000."]
+configuration = ["firmware.config = rmx3823; firmware.dsc = Platforms/Realme/rmx3823Pkg/rmx3823.dsc; firmware.fd = Build/rmx3823Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd", "firmware.defines: ENABLE_SECUREBOOT=1, MEMORY_PROTECTION=TRUE, SHIP_MODE=FALSE", "uefi/apply.sh derives Platforms/Realme/rmx3823Pkg from Platforms/OnePlus/salamiPkg, rewrites the package name in the fdf and Include/*.inc, and installs Resources/Configs/rmx3823.toml plus Resources/DTBs/rmx3823.dtb", "uefi/configs/rmx3823.toml: uefi_fd base 0xA7100000 size 0x300000, boot_image.header_version 4, kernel_compression gzip, append_dtb true"]
+procedure = ["Run sh uefi/apply.sh <Mu-Silicium checkout>, then python3 build_uefi.py -d rmx3823 -r RELEASE", "Assert Build/rmx3823Pkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd is exactly 0x300000 bytes and contains at least 20 PE32 sections", "Test with fastboot boot before writing any partition"]
+findings = ["Mu-Silicium has no SM8550 realme package: Platforms/Realme only carries bale_b (Palawan), bitra (Kona), senna_a and senna_bc (Palima). salami (OnePlus 11) is the only kalama OPPO-family package and the closest template.", "uefi_fd size is now a measured value, not a copy: the stock uefi_a partition holds an ELF wrapping a single FV of exactly 0x300000 bytes with a 0x48 header (3,006,856 bytes used, 138,800 free). base 0xA7100000 is confirmed to sit inside a free gap: the board's own reservations leave 0xA4F08000..0xA7605000 unclaimed.", "The kalama stock bootloader injects oplusboot.* and device_info.* into the DTB, so the firmware DTB must be the device's own tree. The uefi.img that shipped in the project root is NOT it: that FD contains OplusStorageDxe/OplusProject/PhoenixDxe and an X.509 subject of 'OPLUS SM8650 Attestation', i.e. it was built for SM8650, while this unit reports soc_id 519 (KALAMA) running kernel 5.15.180-android13-8. The device's own uefi_a is the DXE reference.", "The whole salami window block transfers unchanged because both boards are OPPO-family kalama: the device DT reserves 0xA7605000 (bootloader log) and 0xB8000000 + 0x2B00000 (cont_splash_region) at exactly salami's Log Buffer and Display Reserved addresses, and the largest free gap starts at exactly salami's DXE Heap base 0xBAB00000.", "apply.sh originally wrote its Resources/ and DTBs/ copies into the package directory when given a relative Mu-Silicium path, because it cd'd into the package before using $MUS. It now resolves MUS to an absolute path first, and uses sed-to-tempfile instead of sed -i so macOS BSD sed works."]
 completion = ["Firmware image builds at the configured FD size, fastboot boot reaches the UniXNU menu, the framebuffer publishes at 1240x2772 and the documented reservations survive handoff."]
-limits = ["No platform package built yet. The FD base is validated against free memory but not against the address the OPPO ABL actually loads the boot image to; /proc/iomem shows the Android kernel at 0xA8000000, which is where the UniXNU boot image will land."]
-next_action = ["Build the platform package with the generated MemoryMapLib and boot it with fastboot boot before writing any partition."]
-evidence = ["uefi/platform/Library/MemoryMapLib/MemoryMapLib.c -- 40 DDR reservations parsed from the device DT plus the verified window block", "dump/gt5/analysis/MemoryMapLib.c -- generator output retained for diffing", "out/img/drivers.txt -- 107 PE32 drivers enumerated from the stock uefi.img FV", "dump/gt5/backup/uefi_a.img -- the device's own 5 MiB UEFI partition"]
+limits = ["No platform package built yet. The FD base is validated against free memory but not against the address the OPPO ABL actually loads the boot image to; /proc/iomem shows the Android kernel at 0xA8000000, which is where the UniXNU boot image will land.", "The 5 MiB uefi_a partition is backed up offline but not committed; evidence/uefi-img-drivers.txt is the committed record of its contents."]
+next_action = ["Run the uefi.yml workflow, which applies the overlay, builds rmx3823Pkg and asserts the FD size and section count, then fastboot boot the result."]
+
+[[area.evidence]]
+kind = "source"
+reference = "uefi/platform/Library/MemoryMapLib/MemoryMapLib.c"
+result = "69 descriptors: 40 DDR reservations parsed from the device DT, the 15-entry UEFI window block, 2 other-memory entries and 12 register regions."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/memorymap-generated.c"
+result = "Unedited generator output, kept so the hand-written names can be diffed against the parser result."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/uefi-img-drivers.txt"
+result = "107 PE32 drivers enumerated from the stock uefi_a firmware volume, including the OPPO-family DXE set."
+
+[[area.evidence]]
+kind = "source"
+reference = "uefi/platform/rmx3823.dsc"
+result = "The platform package description: KailuaPkg include, 0x80000000 memory base, 1240x2772 framebuffer and the realme SMBIOS identity."
+
+[[area.evidence]]
+kind = "source"
+reference = "uefi/configs/rmx3823.toml"
+result = "The measured uefi_fd base and size that the FD assertion in CI enforces."
 
 [[area]]
 id = "cpu"
@@ -42,11 +84,20 @@ paths = ["dts/**", "package/**"]
 inputs = ["CPU topology of SM8550-AB (1x X3 + 4x A715/A710 + 3x A510)", "GIC redistributor base and stride, arch timer frequency", "PSCI method and conduit from the stock DT"]
 configuration = ["One enabled CPU node per core with reg = MPIDR affinity and unixnu,cluster-type = P or E", "/cpus timebase-frequency from the arch timer; /psci method = smc"]
 procedure = ["Fill the CPU nodes and /psci from the stock DT", "Run ./unixnu build kernel and check that every enabled CPU reaches its entry checkpoint", "Confirm timer and IPI handling on all cores before enabling storage"]
-findings = ["Topology read from the device DT: 8 cores, /cpus #address-cells = <2> #size-cells = <0>, reg values 0x0/0x100/0x200 (capacity-dmips-mhz 820, A510 cluster), 0x300/0x400/0x500/0x600 (1800, A715/A710), 0x700 (1894, X3).", "The arch timer is /soc/timer with compatible arm,armv8-timer and clock-frequency 0x124F800 (19.2 MHz), which confirms the value the template only guessed at.", "PSCI is /soc/psci, compatible arm,psci-1.0, method = smc."]
+findings = ["Topology read from the device DT: 8 cores, /cpus #address-cells = <2> #size-cells = <0>, reg values 0x0/0x100/0x200 (capacity-dmips-mhz 820, A510 cluster), 0x300/0x400/0x500/0x600 (1800, A715/A710), 0x700 (1894, X3).", "The arch timer is /soc/timer with compatible arm,armv8-timer and clock-frequency 0x124F800 (19.2 MHz), which confirms the value the template only guessed at.", "PSCI is /soc/psci, compatible arm,psci-1.0, method = smc.", "dts/rmx3823.dts only adds unixnu,cluster-type to the SoC dtsi's cpu nodes instead of redeclaring them, so the measured MPIDRs and the arm,cortex-* compatible strings stay in one place."]
 completion = ["Every enabled CPU reaches its entry checkpoint and timer/IPI handling works on each enabled CPU."]
 limits = ["No device run yet: the DTS values are measured but the bring-up checkpoints are unverified."]
 next_action = ["Build the kernel and confirm all 8 cores reach their entry checkpoint before enabling storage."]
-evidence = ["UniXNU-rmx3823/dts/rmx3823.dts -- 8 CPU nodes with measured MPIDR affinities and cluster types", "dump/gt5/analysis/board-facts.md -- DRAM/timer/PSCI values parsed from /sys/firmware/fdt"]
+
+[[area.evidence]]
+kind = "source"
+reference = "dts/rmx3823.dts"
+result = "Eight CPU nodes tagged with the measured MPIDR affinities and cluster types, plus the 19.2 MHz timebase and PSCI 1.0/smc."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The DRAM, timer and PSCI values parsed from /sys/firmware/fdt that the DTS is derived from."
 
 [[area]]
 id = "memory"
@@ -54,13 +105,42 @@ status = "implemented"
 components = ["ArmDTPlatform", "ArmSmmu4K"]
 paths = ["dts/**", "package/*Smmu*", "scripts/*smmu*"]
 inputs = ["Usable DRAM range after reservations", "reserved-memory set: gunyah, cpusys_vm, xbl logs, aop, smem, PIL/mpss, display, splash", "apps SMMU stream IDs for UFS, display and Wi-Fi"]
-configuration = ["Seven memory ranges in dts/rmx3823.dts taken verbatim from /memory", "Splash reservation appended through [[bootimg.dtb_node]] in board.toml"]
+configuration = ["One contiguous 2 GiB memory window at 0x80000000 in dts/rmx3823.dts, matching [payload] dram_size", "Splash reservation appended through [[bootimg.dtb_node]] in board.toml", "MemoryMapLib.c carries the 40 reserved ranges plus the UEFI window block"]
 procedure = ["Compare the stock DT memory node with the reserved-memory children and compute the usable range", "Record every handoff region before enabling DMA users", "Validate SMMU stream IDs against the stock DT iommus properties"]
-findings = ["Measured DRAM: 23.61 GiB across 7 populated ranges (0x80000000+0xE00000, 0x811D0000+0x56E30000, 0xD8140000+0x20000, 0xE1BB0000+0x1E450000, 0x880000000+0x31300000, 0x8C0000000+0x140000000, 0xA00000000+0x400000000). The unit is the 24 GB SKU.", "43 reserved ranges, 0.65 GiB total, every one carrying its stock label (gunyah_hyp_region, smem_region, mpss_region, adspslpi_region, splash_region, mpss_dsm_region, trust_ui_vm_region, oem_vm_region, ...). They are reproduced verbatim in MemoryMapLib.c.", "Free gaps that matter: 0xA4F08000..0xA7605000 (39.0 MiB, holds the FD block), 0xA760D000..0xB8000000 (265.9 MiB, holds the 256 MiB kernel window) and 0xBAB00000..0xD4D00000 (418.0 MiB, holds the DXE heap).", "splash_region is 0xB8000000 + 0x2B00000, which is exactly the 44 MiB the UniXNU boot-image dtb_node example uses; that node is now a measured value rather than a placeholder.", "Two of the 43 reservations are duplicated by the UEFI window block and were dropped from the descriptor array to avoid overlapping entries: splash_region (-> Display Reserved) and botloader_mem at 0xA7605000 (-> Log Buffer). llcc_lpi_region folds into NOMAP.", "The XNU DRAM window is a separate decision from the 23.61 GiB the device reports. scripts/unixnu/devicetree.py refuses anything but one memory node with one range (\"ADT handoff requires one contiguous DRAM range\") and requires board.toml [payload] dram_size to equal it, so dts/rmx3823.dts declares 0x80000000 + 0x80000000 (2 GiB) exactly as UniXNU-sheng does. Inside that window the device backs 1888.6 MiB; the 159.4 MiB (7.8%) that it does not are the holes at 0x80E00000+0x3D0000, 0xD8000000+0x140000 and 0xD8160000+0x9A50000. ci/verify-dts.py recomputes both numbers and fails above 25% phantom.", "The UEFI FD (0xA7100000) and the kernel window (0xA8000000) both fall inside the declared 2 GiB, so the firmware and the kernel stay addressable from the ADT's point of view."]
+findings = ["Measured DRAM: 23.61 GiB across 7 populated ranges (0x80000000+0xE00000, 0x811D0000+0x56E30000, 0xD8140000+0x20000, 0xE1BB0000+0x1E450000, 0x880000000+0x31300000, 0x8C0000000+0x140000000, 0xA00000000+0x400000000). The unit is the 24 GB SKU.", "43 reserved ranges, 0.65 GiB total, every one carrying its stock label (gunyah_hyp_region, smem_region, mpss_region, adspslpi_region, splash_region, mpss_dsm_region, trust_ui_vm_region, oem_vm_region, ...). They are reproduced verbatim in MemoryMapLib.c.", "Free gaps that matter: 0xA4F08000..0xA7605000 (39.0 MiB, holds the FD block), 0xA760D000..0xB8000000 (265.9 MiB, holds the 256 MiB kernel window) and 0xBAB00000..0xD4D00000 (418.0 MiB, holds the DXE heap).", "splash_region is 0xB8000000 + 0x2B00000, which is exactly the 44 MiB the UniXNU boot-image dtb_node example uses; that node is now a measured value rather than a placeholder.", "Two of the 43 reservations are duplicated by the UEFI window block and were dropped from the descriptor array to avoid overlapping entries: splash_region (-> Display Reserved) and botloader_mem at 0xA7605000 (-> Log Buffer). llcc_lpi_region folds into NOMAP.", "The XNU DRAM window is a separate decision from the 23.61 GiB the device reports. scripts/unixnu/devicetree.py refuses anything but one memory node with one range ('ADT handoff requires one contiguous DRAM range') and requires board.toml [payload] dram_size to equal it, so dts/rmx3823.dts declares 0x80000000 + 0x80000000 (2 GiB) exactly as UniXNU-sheng does. Inside that window the device backs 1888.6 MiB; the 159.4 MiB (7.8%) that it does not are the holes at 0x80E00000+0x3D0000, 0xD8000000+0x140000 and 0xD8160000+0x9A50000. ci/verify-dts.py recomputes both numbers and fails above 25% phantom.", "The UEFI FD (0xA7100000) and the kernel window (0xA8000000) both fall inside the declared 2 GiB, so the firmware and the kernel stay addressable from the ADT's point of view."]
 completion = ["All handoff regions are accounted for and each enabled DMA engine accesses its allocated range with the documented cache policy."]
 limits = ["The kernel window is validated against free memory but not against the ABL load address; /proc/iomem shows the Android kernel at 0xA8010000, so the UniXNU boot image will land inside the same 256 MiB window.", "SMMU stream IDs are not yet extracted.", "The 2 GiB ADT window is deliberately smaller than the 23.61 GiB the device reports, and 159.4 MiB of it is not backed by DRAM. Raising it is a post-first-boot change that needs the reserved-memory set turned into ADT reservations.", "[payload.adt] owned_memory_size and root_match_volume_uuid are still placeholders, so ./unixnu build payload cannot run yet: sheng uses 0x130000000 for the same 2 GiB window but that value is not verified here, and the root volume UUID only exists after the first install."]
 next_action = ["Enable storage and confirm that ShengUfs takes the apps SMMU without colliding with the display or Wi-Fi windows."]
-evidence = ["dump/gt5/firmware.dtb -- the device's own FDT (805,135 bytes) from /sys/firmware/fdt", "dump/gt5/analysis/reserved-memory.txt -- 43 labelled ranges", "dump/gt5/analysis/board-facts.md -- DRAM table and the free-gap table with FD-block and kernel-window fit columns", "uefi/platform/Library/MemoryMapLib/MemoryMapLib.c"]
+
+[[area.evidence]]
+kind = "source"
+reference = "uefi/dtb/rmx3823.dtb"
+result = "The device's own merged FDT (805,135 bytes) captured from /sys/firmware/fdt; the reference every memory claim is checked against."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/reserved-memory.txt"
+result = "All 43 labelled reservations with base, size and label, as parsed from that FDT."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The DRAM table and the free-gap table, with separate FD-block and kernel-window fit columns."
+
+[[area.evidence]]
+kind = "source"
+reference = "uefi/platform/Library/MemoryMapLib/MemoryMapLib.c"
+result = "The descriptor array the firmware actually boots with, including the cache attributes per range."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/kalama-base.dtb"
+result = "The SoC half of the DTB chain, from vendor_boot_a entry 1; msm-id 0x207 confirms the SM8550 identity."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/zonda-B.dtbo"
+result = "The board overlay half of the chain, from dtbo_a entry 0; board-id [8,1] matches the running unit."
 
 [[area]]
 id = "storage"
@@ -74,7 +154,21 @@ findings = ["ShengUfs is board-scoped and verified only on sheng, but its contro
 completion = ["Host facts match the board inventory; SCSI capacity, GPT and known blocks are correct; the configured volume mounts and launchd starts; writes survive reboot."]
 limits = ["No device run; the userdata window bounds are known in bytes but the GPT and LUN layout have not been read from inside UniXNU."]
 next_action = ["Run scripts/dual_sys/partition.py inspect to capture GPT, block size and the exact userdata LBA range."]
-evidence = ["dump/gt5/block-sizes.txt -- userdata 1,004,075,544,576 and super 14,495,514,624 bytes", "dump/gt5/iomem.txt -- ufsphy_mem 0x1d80000, ufs_mem 0x1d84000, ufs_ice 0x1d88000, ufs_ice_hwkm 0x1d90000", "dump/gt5/analysis/board-facts.md -- storage table"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/block-sizes.txt"
+result = "userdata 1,004,075,544,576 bytes and super 14,495,514,624 bytes, which contradict the TWRP BoardConfig for this SKU."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/iomem.txt"
+result = "ufsphy_mem 0x1d80000, ufs_mem 0x1d84000, ufs_ice 0x1d88000 and ufs_ice_hwkm 0x1d90000, matching the sheng controller layout."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The storage table joining the DT nodes with the measured partition geometry."
 
 [[area]]
 id = "display"
@@ -88,7 +182,21 @@ findings = ["Panel is identified from the stock cmdline, not guessed: msm_drm.ds
 completion = ["A known frame appears with correct geometry and colours, then userland presentation and backlight control work."]
 limits = ["No GOP or panel evidence yet; the backlight transport is unimplemented for this board."]
 next_action = ["Capture the firmware GOP mode at 1240x2772 and the stock panel DT node (timing, DSC, backlight) for the display porting work."]
-evidence = ["dump/gt5/cmdline.txt -- msm_drm.dsi_display0 / oplus_sensor.dsi_display0 / oplus_bsp_tp_custom.dsi_display0", "dump/gt5/dmesg.txt -- [TM_NT37705] dsi_cmd lines and the 60->120 fps switch", "dump/gt5/analysis/board-facts.md -- splash_region 0xB8000000 + 0x2B00000"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/cmdline.txt"
+result = "msm_drm.dsi_display0, oplus_sensor.dsi_display0 and oplus_bsp_tp_custom.dsi_display0 all name the zonda_tianma_nt37705 panel."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/dmesg.txt"
+result = "The [TM_NT37705] dsi_cmd lines and the observed 60 to 120 fps refresh switch."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The panel and display tables, including splash_region 0xB8000000 + 0x2B00000."
 
 [[area]]
 id = "input"
@@ -102,7 +210,21 @@ findings = ["The wired touch controller is a Synaptics S3910 on QUPv3_1 SE 4: th
 completion = ["Touches map to the display, contacts keep stable IDs, release events arrive and buttons produce the expected HID reports."]
 limits = ["The S3910 TCM protocol layer does not exist in any UniXNU component; it is new work.", "Report descriptor ranges for 1240x2772 are not yet written."]
 next_action = ["Implement a Synaptics TCM producer on QcomGeniSpi SE 4 and feed native_touch_ frames into ShengHidInput."]
-evidence = ["dump/gt5/analysis/board-facts.md -- touch table with the s3910, gt9916 and tcm-spi-hbp nodes and their bus paths", "dump/gt5/cmdline.txt -- oplus_bsp_tp_custom.dsi_display0 selects synaptics-s3910", "dump/gt5/dmesg.txt -- [TP0]synaptics-s3910 register writes and first-touch-point events"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The touch table listing the s3910, gt9916 and tcm-spi-hbp nodes with their bus paths."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/cmdline.txt"
+result = "oplus_bsp_tp_custom.dsi_display0 selects synaptics-s3910, ruling out the Goodix pairing on this unit."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/dmesg.txt"
+result = "The [TP0]synaptics-s3910 register writes and first-touch-point events."
 
 [[area]]
 id = "gpu"
@@ -116,7 +238,11 @@ findings = ["The GPU is confirmed Adreno 740: the stock DT reports compatible qc
 completion = ["GPU submissions complete, mapping/fence handling is correct, a known image renders and the Metal client presents it."]
 limits = ["Firmware blobs not extracted; no device run."]
 next_action = ["Extract the a740 firmware set from the device's vendor partition and pin its hashes in proprietary-files.txt."]
-evidence = ["dump/gt5/analysis/board-facts.md -- gpu table with kgsl-3d0, gen7-gmu and adreno-smmu nodes"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The GPU table with the kgsl-3d0, gen7-gmu and adreno-smmu nodes and their register windows."
 
 [[area]]
 id = "network"
@@ -126,11 +252,20 @@ paths = ["drivers/Ath12kWifi", "package/*Wifi*", "package/MhiBoot*", "scripts/*w
 inputs = ["Wi-Fi chip identity and firmware", "PCIe controller, BAR, MSI and DMA configuration", "SMMU stream and MHI/QRTR parameters"]
 configuration = ["Ath12kWifi component with its MHI and QRTR inputs"]
 procedure = ["Enumerate the PCIe endpoint, boot firmware over MHI, then scan and associate", "Verify sustained receive/transmit traffic"]
-findings = ["The WLAN part is WCN6855, not WCN7850: the stock DT carries qcom,cnss-qca-converged plus bt-qca-converged/bt_qca6490 (QCA6490 is the BT core inside the WCN6855 package), alongside qcom,pcie@0x40000000, mhi_dev@0x1c0b000 and ipa_smmu_wlan.", "Ath12kWifi is ath12k only -- its component entry lists qcc2072, qcn9274 and wcn7850 build inputs. WCN6855 is an ath11k part, so that component cannot be selected here and this area is new work rather than reuse.", "sheng's note still applies: the Wi-Fi SMMU window is opt-in because the storage driver owns the apps SMMU, and the IPA wlan SMMU context bank is a separate allocation on this board."]
+findings = ["The WLAN part is WCN6855, not WCN7850: the stock DT carries qcom,cnss-qca-converged plus bt-qca-converged/bt_qca6490 (QCA6490 is the BT core inside the WCN6855 package), alongside qcom,pcie@0x40000000, mhi_dev@0x1c0b000 and ipa_smmu_wlan.", "Ath12kWifi is ath12k only -- its component entry in components.toml lists qcc2072, qcn9274 and wcn7850 build inputs. WCN6855 is an ath11k part, so that component cannot be selected here and this area is new work rather than reuse.", "sheng's note still applies: the Wi-Fi SMMU window is opt-in because the storage driver owns the apps SMMU, and the IPA wlan SMMU context bank is a separate allocation on this board."]
 completion = ["Scanning, association, address configuration and sustained traffic pass with the selected firmware."]
 limits = ["No ath11k transport exists in any UniXNU component; the whole area is unimplemented.", "No device run."]
 next_action = ["Extract the WCN6855 firmware set (bdwlan, regdb, amss) from the device's vendor partition and decide whether an ath11k transport is in scope."]
-evidence = ["dump/gt5/analysis/board-facts.md -- wifi table listing cnss-qca-converged, bt_qca6490, mhi_dev and ipa_smmu_wlan", "UniXNU-main/components.toml -- Ath12kWifi hardware list is ath12k-only"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The Wi-Fi table listing cnss-qca-converged, bt_qca6490, mhi_dev and ipa_smmu_wlan, which identifies the part as an ath11k WCN6855."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/iomem.txt"
+result = "The PCIe, MHI and IPA wlan register windows that any future transport has to drive."
 
 [[area]]
 id = "audio"
@@ -144,7 +279,11 @@ findings = ["Codec wiring from the stock DT: qcom,wcd938x-codec with wcd938x rx/
 completion = ["Each declared route carries the selected format through playback or capture and handles start/stop correctly."]
 limits = ["No DSP transport implemented for this board.", "The TFA98xx amplifiers need their own init sequence before the codec route is usable."]
 next_action = ["Extract adsp.* and the TFA98xx firmware from the device's vendor partition."]
-evidence = ["dump/gt5/analysis/board-facts.md -- codec table with wcd938x-codec and both tfa98xx nodes"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The codec table with wcd938x-codec and both tfa98xx nodes at i2c 0xa98000."
 
 [[area]]
 id = "power"
@@ -158,7 +297,16 @@ findings = ["The 240W SuperVOOC path is a vendor charge-pump design that no UniX
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
 limits = ["No charging control; thermal and battery safety during long runs are unverified.", "The gauge is behind GENI I2C on QUPv3_2 SE 0, which is not yet enabled."]
 next_action = ["Read the BQ27541 gauge over GENI I2C and record the thermal zone list before claiming any power state."]
-evidence = ["dump/gt5/analysis/board-facts.md -- pmic and charger tables", "dump/gt5/iomem.txt -- spmi-pmic-arb 0xc42d000 and the QUPv3_2 I2C windows"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The PMIC and charger tables naming every SC8571, SC8517, BQ27541 and PM8550 instance with its I2C address."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/iomem.txt"
+result = "spmi-pmic-arb at 0xc42d000 and the QUPv3_2 I2C windows the gauge sits behind."
 
 [[area]]
 id = "packaging"
@@ -168,22 +316,40 @@ paths = ["scripts/*payload*", "scripts/*image*", "patches/**", "package/Kit.toml
 inputs = ["Unique chip ID, trust cache bundle and Data seed ramdisk for the selected iPadOS build", "Firmware DTB for boot image assembly", "Partition target: unixnu partition or an existing scratch partition"]
 configuration = ["[payload] volume RMX3823ESP, size_mib 192, panic_screen, kernel_args -v serial=3", "[payload.adt] chip_id 207, packed_data_ramdisk, persistent_data"]
 procedure = ["Build kernel, package, firmware, payload and boot image in that order", "Inspect boot/boot.json for a nonzero ramdisk_bytes and the required firmware modules", "Flash only to the intended partition; verify the target name before writing"]
-findings = ["Payload discovery depends on UniXNURamDiskDxe reading the Mu-Silicium entry-argument HOB, so the firmware must embed it together with DiskIoDxe and the FAT driver.", "chip_id 207 is confirmed as this board's msm-id: the device DT reports qcom,msm-id = 0x207/0x20000 and 0x207/0x10000 first, and /sys/devices/soc0/soc_id = 519 = 0x207. The sheng value therefore transfers unchanged.", "The device's own boot_a is 201,326,592 bytes and vendor_boot_a is the same size, so a 192 MiB payload volume plus BootShim, FV and DTB still fits the boot partition with room to spare."]
+findings = ["Payload discovery depends on UniXNURamDiskDxe reading the Mu-Silicium entry-argument HOB, so the firmware must embed it together with DiskIoDxe and the FAT driver.", "chip_id 207 is confirmed as this board's msm-id: the device DT reports qcom,msm-id = 0x207/0x20000 and 0x207/0x10000 first, and /sys/devices/soc0/soc_id = 519 = 0x207. The sheng value therefore transfers unchanged.", "The device's own boot_a is 201,326,592 bytes and vendor_boot_a is the same size, so a 192 MiB payload volume plus BootShim, FV and DTB still fits the boot partition with room to spare.", "The 192 MiB payload volume is chosen so that FV (3 MiB) + DTB (0.8 MiB) + BootShim still fit inside the 192 MiB boot_a partition with the documented slack."]
 completion = ["Kernel and prelink succeed, the payload contains all declared inputs and the boot image matches the bootloader format and size limit."]
 limits = ["root_match_volume_uuid and owned_memory_size are unknown until the OS image is installed."]
 next_action = ["Generate the payload after the first successful firmware boot and record boot.json."]
-evidence = ["dump/gt5/block-sizes.txt -- boot_a and vendor_boot_a are both 201,326,592 bytes", "dump/gt5/analysis/board-facts.md -- identity block with msm-id 0x207"]
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/block-sizes.txt"
+result = "boot_a and vendor_boot_a are both 201,326,592 bytes, which bounds the boot image the packaging step may produce."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/board-facts.md"
+result = "The identity block with msm-id 0x207 and soc_id 519 that justify chip_id 207."
 
 [[area]]
 id = "diagnostics"
 status = "planned"
 components = ["ShengPreflight"]
-paths = ["scripts/check-*", "scripts/probe-*", "scripts/data/**", "unixnu.lock"]
+paths = ["scripts/check-*", "scripts/probe-*", "scripts/data/**", "unixnu.lock", "evidence/**"]
 inputs = ["Serial access or the Advanced Logger QR export", "Reproducible commands per bring-up stage"]
-configuration = ["scripts/check-rmx3823.py preflight wired through firmware.preflight"]
+configuration = ["scripts/check-rmx3823.py preflight wired through firmware.preflight", "evidence/ holds the raw captures that porting.toml cites, so every claim in this record has a file behind it"]
 procedure = ["Enable the firmware log exporter before the first kernel handoff", "Record the last completed stage, the command and the captured log for every attempt"]
-findings = ["The green-bar and colour-bar checkpoints are the primary signal on a phone with no accessible UART; the QR log export must be integrated early.", "Each failed attempt should keep its boot image and log so stages can be bisected."]
+findings = ["The green-bar and colour-bar checkpoints are the primary signal on a phone with no accessible UART; the QR log export must be integrated early.", "Each failed attempt should keep its boot image and log so stages can be bisected.", "scripts/porting-record.py check requires every evidence reference to be an existing repository-relative path or an HTTPS URL, so the raw captures had to be committed under evidence/ rather than left in an offline dump directory."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
-limits = ["No log capture integrated yet."]
+limits = ["No log capture integrated yet.", "The 27-partition backup (981 MB) stays offline; only its size manifest is summarised in evidence/block-sizes.txt."]
 next_action = ["Add AdvancedLogDxe and the QR exporter to the rmx3823Pkg DSC/FDF."]
-evidence = []
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/README.md"
+result = "Provenance for every capture: the exact adb commands, the device identity and the file inventory."
+
+[[area.evidence]]
+kind = "source"
+reference = "evidence/dmesg.txt"
+result = "11,394 lines of kernel log covering panel, touch, PMIC, UFS and the WiFi probe."

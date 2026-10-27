@@ -39,9 +39,19 @@ jobs:
           sudo apt-get install -y -qq device-tree-compiler
           dtc --version
 
+      - name: Fetch the SoC device tree include
+        run: |
+          # dts/rmx3823.dts starts with /include/ "sm8550.dtsi", which ships in
+          # the SoC feed pinned by feeds.toml rather than in this repository.
+          # A real build resolves it through board.toml
+          # device_tree.include_dirs = ["soc:dts"]; mirror that here, at the same
+          # commit, so this compile exercises the same include.
+          python3 ci/fetch-soc-dts.py --out "$RUNNER_TEMP/soc-dts/sm8550.dtsi"
+          echo "SOC_DTS=$RUNNER_TEMP/soc-dts" >> "$GITHUB_ENV"
+
       - name: Compile dts/rmx3823.dts
         run: |
-          dtc -I dts -O dtb -o "$RUNNER_TEMP/rmx3823.dtb" dts/rmx3823.dts
+          dtc -I dts -O dtb -o "$RUNNER_TEMP/rmx3823.dtb" -i "$SOC_DTS" dts/rmx3823.dts
           dtc -I dtb -O dts -o "$RUNNER_TEMP/rmx3823.roundtrip.dts" "$RUNNER_TEMP/rmx3823.dtb"
           printf 'compiled %s bytes\n' "$(wc -c < "$RUNNER_TEMP/rmx3823.dtb" | tr -d ' ')"
           grep -E '^\s*(model|compatible)' "$RUNNER_TEMP/rmx3823.roundtrip.dts" | head -n 4
