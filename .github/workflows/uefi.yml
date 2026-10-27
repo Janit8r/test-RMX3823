@@ -124,19 +124,22 @@ jobs:
           ( cd Mu-Silicium && bash ./setup_env.sh -p apt ) >> "$LOG" 2>&1 \
             || echo "::warning::Mu-Silicium setup_env.sh reported a problem; the checks below are authoritative"
 
+          # edk2-pytool-extensions ships stuart_build / stuart_setup / stuart_update
+          # but no bare `stuart`; DeviceBuild.py imports those modules and calls
+          # them in-process, so only the python packages matter here.
           missing=""
-          for tool in clang lld aarch64-linux-gnu-gcc nasm dtc stuart git; do
+          for tool in clang lld aarch64-linux-gnu-gcc nasm dtc git; do
             command -v "$tool" > /dev/null || missing="$missing $tool"
           done
           if [ -n "$missing" ]; then
             echo "::error::missing after install:$missing"
-            echo "PATH=$PATH"
+            echo "::error::PATH=$PATH"
             echo "--- /usr/local/bin ---"; ls -1 /usr/local/bin | head -n 30
             echo "--- ~/.local/bin ---";  ls -1 "$HOME/.local/bin" 2>/dev/null | head -n 30
-            echo "--- pip show ---"; python3 -m pip show edk2-pytool-extensions 2>&1 | head -n 6
             exit 1
           fi
           python3 -c 'import edk2toolext, edk2toollib; print("edk2 pytools ok")'
+          python3 -c 'from edk2toolext.invocables.edk2_platform_build import Edk2PlatformBuild; print("Edk2PlatformBuild importable")'
           clang --version | head -n 1
           aarch64-linux-gnu-gcc --version | head -n 1
 
