@@ -1,0 +1,13 @@
+{
+  "kernel_sha256": "b425b2edd198ede6903ea98e42f631c81a52289140a3835cd01f7740db803bfb",
+  "ramdisk_bytes": 0,
+  "header_version": 4,
+  "kernel_address": null,
+  "tags_address": null,
+  "image_sha256": "2f7ef1797a1de1e63fc48e11163fd2a5884af800c0a23f1c9128785ba60b8770",
+  "image_bytes": 1912832,
+  "fd_sha256": "875c2d57557c2713de46e7e84de001805f4570f79e7de96385c1197a3adfd326",
+  "dtb_sha256": "88d9394043d6f84da9d1abb73c13b122655b9a4b917cfba8ad08e5fb27e8fd09",
+  "shim_bytes": 112,
+  "hardware_tested": false
+}
