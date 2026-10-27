@@ -159,17 +159,50 @@ jobs:
       - name: Select the board
         working-directory: unixnu
         run: |
-          ./unixnu defconfig rmx3823_defconfig -D "$GITHUB_WORKSPACE/device"
-          ./unixnu status
+          # ./unixnu writes its real complaint to stdout, and the job log needs
+          # repository admin to read, so every invocation is teed and its tail
+          # re-emitted as annotations. Without this a failure here is only an
+          # exit code, which is undebuggable.
+          log="$RUNNER_TEMP/unixnu-defconfig.log"
+          ./unixnu --help 2>&1 | tee "$RUNNER_TEMP/unixnu-help.log" || true
+          set +e
+          ./unixnu defconfig rmx3823_defconfig -D "$GITHUB_WORKSPACE/device" 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then
+            ./unixnu status 2>&1 | tee -a "$log"
+            rc=${PIPESTATUS[0]}
+          fi
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::selecting the board failed with exit $rc"
+            tail -n 40 "$log" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::unixnu: $line"
+            done
+            exit "$rc"
+          fi
 
       - name: Fetch the sources
         working-directory: unixnu
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./unixnu fetch
-          ./unixnu status --json > "$RUNNER_TEMP/status.json"
-          df -h "$GITHUB_WORKSPACE"
+          log="$RUNNER_TEMP/unixnu-fetch.log"
+          set +e
+          ./unixnu fetch 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then
+            ./unixnu status --json > "$RUNNER_TEMP/status.json" 2>>"$log"
+            rc=$?
+          fi
+          set -e
+          df -h "$GITHUB_WORKSPACE" || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::fetching the sources failed with exit $rc"
+            tail -n 40 "$log" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::fetch: $line"
+            done
+            exit "$rc"
+          fi
 
       - name: Build the kernel
         id: kernel
@@ -177,8 +210,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./unixnu build kernel
-          df -h "$GITHUB_WORKSPACE"
+          log="$RUNNER_TEMP/unixnu-kernel.log"
+          set +e
+          ./unixnu build kernel 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          df -h "$GITHUB_WORKSPACE" || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::building the kernel failed with exit $rc"
+            tail -n 40 "$log" | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::kernel: $line"
+            done
+            exit "$rc"
+          fi
 
       - name: Fetch the firmware volume
         if: env.BOOTIMG == 'true'
@@ -261,6 +305,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           find unixnu/out -name '*.log' -size -4M 2>/dev/null | while read -r log; do
             cp "$log" "$RUNNER_TEMP/logs/$(echo "$log" | tr '/' '_')"
+          done || true
+          # The teed ./unixnu transcripts live in RUNNER_TEMP, not in out/.
+          for log in "$RUNNER_TEMP"/unixnu-*.log; do
+            [ -f "$log" ] && cp "$log" "$RUNNER_TEMP/logs/"
           done || true
           ls -l "$RUNNER_TEMP/logs" | head -n 40 || true
 
