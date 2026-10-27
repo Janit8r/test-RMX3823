@@ -58,7 +58,7 @@ cp -R "$MUS/Platforms/OnePlus/salamiPkg" "$PKG"
 cd "$PKG"
 mv salami.dsc rmx3823.dsc
 mv salami.fdf rmx3823.fdf
-[ -f salami.dec ] && mv salami.dec rmx3823.dec
+if [ -f salami.dec ]; then mv salami.dec rmx3823.dec; fi
 
 echo "==> replacing board files"
 cp "$HERE/platform/rmx3823.dsc" rmx3823.dsc
@@ -70,6 +70,24 @@ echo "==> rewriting package self-references"
 for f in rmx3823.fdf Include/APRIORI.inc Include/DXE.inc Include/RAW.inc; do
   rewrite "$f" "salamiPkg" "rmx3823Pkg"
 done
+
+# DeviceBuild.py is the stuart entry point build_uefi.py drives, and it hardcodes
+# the package name, the DSC path and the package search roots. Left alone, the
+# build looks for Platforms/OnePlus/rmx3823Pkg/rmx3823.dsc and stops before
+# compiling a single file -- which is exactly what the first CI run would have
+# hit. Renaming salamiPkg first means the bare "salami" pass below cannot
+# double-convert it.
+if [ -f DeviceBuild.py ]; then
+  echo "    DeviceBuild.py"
+  rewrite DeviceBuild.py "salamiPkg" "rmx3823Pkg"
+  rewrite DeviceBuild.py "salami" "rmx3823"
+  # The package now lives under Platforms/Realme, which is not a search root.
+  # Matches only the entry with a quote directly before it, so the
+  # "Silicium-ACPI/Platforms/OnePlus" root is left untouched.
+  if ! grep -q '"Platforms/Realme"' DeviceBuild.py; then
+    rewrite DeviceBuild.py '"Platforms/OnePlus",' '"Platforms/Realme", "Platforms/OnePlus",'
+  fi
+fi
 
 if [ "$BINARIES" = "rmx3823" ]; then
   echo "==> pointing Include/*.inc at Binaries/rmx3823"

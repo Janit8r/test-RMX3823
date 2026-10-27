@@ -49,7 +49,9 @@ defaults:
 jobs:
   firmware:
     name: Build SILICIUM_UEFI.fd
-    runs-on: ubuntu-latest
+    # Mu-Silicium's own CI builds on ubuntu-24.04; pin the same image so the
+    # apt package set setup_env.sh expects is the one it gets.
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
       - name: Check out the device repository
@@ -75,15 +77,19 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
 
       - name: Install host tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            build-essential uuid-dev iasl nasm python3 python3-pip \
-            python3-venv mtools device-tree-compiler
-          # Mu-Silicium's own bootstrap; it is idempotent and may complain about
-          # packages the image already provides, so its failure is not fatal here.
-          ( cd Mu-Silicium && ./setup_env.sh -p apt ) \
-            || echo "::warning::Mu-Silicium setup_env.sh reported a problem; continuing"
+          # Mu-Silicium's own bootstrap, and their CI runs exactly this. It
+          # installs clang, lld, nasm, uuid-dev, gcc-aarch64-linux-gnu (BootShim
+          # is built with the cross gcc) and the EDK II Python requirements.
+          # Deliberately not wrapped in "|| echo": if it fails the build fails
+          # later with a much worse error.
+          ( cd Mu-Silicium && bash ./setup_env.sh -p apt )
+          for tool in clang lld aarch64-linux-gnu-gcc nasm dtc git; do
+            command -v "$tool" > /dev/null || { echo "::error::missing $tool after setup"; exit 1; }
+          done
+          python3 -c 'import edk2toolext, edk2toollib; print("edk2 pytools ok")'
 
       - name: Apply the rmx3823 platform package
         run: |
@@ -92,6 +98,15 @@ jobs:
           echo "==> resulting package"
           find Mu-Silicium/Platforms/Realme -maxdepth 2 -type f | sort
           grep -n "Binaries/" Mu-Silicium/Platforms/Realme/rmx3823Pkg/Include/*.inc | head -n 10 || true
+          # DeviceBuild.py is the stuart entry point; if any salami name survives
+          # it, the build looks in Platforms/OnePlus and dies before compiling.
+          DB=Mu-Silicium/Platforms/Realme/rmx3823Pkg/DeviceBuild.py
+          if grep -n 'salami' "$DB"; then
+            echo "::error::$DB still refers to salami"
+            exit 1
+          fi
+          grep -n 'ACTIVE_PLATFORM\|PackagesSupported\|"Platforms/Realme"' "$DB"
+          python3 -c "import ast,sys;ast.parse(open('$DB').read());print('DeviceBuild.py parses')"
 
       - name: Build the firmware volume
         run: |
